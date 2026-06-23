@@ -317,31 +317,101 @@ function adicionarAgenda_(ss, dados, linhaProc, headers, urgente) {
 }
 
 // ──────────────────────────────────────────────────────────
-// ATUALIZAÇÕES MANUAIS — E-MAILS DE HOJE (23/06/2026)
-// Execute "aplicarAtualizacoesDeHoje" para registrar os
-// 3 e-mails do PJe Push recebidos hoje.
+// TODAS AS ATUALIZAÇÕES PENDENTES (sessões anteriores + hoje)
+// Execute "aplicarTodasAtualizacoesPendentes" — pode rodar
+// mais de uma vez sem duplicar dados.
 // ──────────────────────────────────────────────────────────
-function aplicarAtualizacoesDeHoje() {
+function aplicarTodasAtualizacoesPendentes() {
   const ss      = getPlanilha_();
   const abaProc = getSheet_(ss, CONFIG.abaProcessos);
   const abaAg   = getSheet_(ss, CONFIG.abaAgenda);
 
-  if (!abaProc) { Logger.log('ERRO: aba Processos não encontrada. Abas disponíveis: ' + ss.getSheets().map(s => s.getName()).join(', ')); return; }
-  if (!abaAg)   { Logger.log('ERRO: aba Agenda não encontrada. Abas disponíveis: '    + ss.getSheets().map(s => s.getName()).join(', ')); return; }
+  if (!abaProc) {
+    SpreadsheetApp.getUi().alert('ERRO: aba "Processos" não encontrada.\nAbas disponíveis: ' + ss.getSheets().map(s => s.getName()).join(', '));
+    return;
+  }
+  if (!abaAg) {
+    SpreadsheetApp.getUi().alert('ERRO: aba "Agenda" não encontrada.\nAbas disponíveis: ' + ss.getSheets().map(s => s.getName()).join(', '));
+    return;
+  }
 
-  const todasLinhas = abaProc.getDataRange().getValues();
+  // Lê linhas UMA vez e reusa (evita múltiplas chamadas à API)
+  let todasLinhas = abaProc.getDataRange().getValues();
   const cab = encontrarCabecalho_(todasLinhas, 'Nº Processo');
-  if (!cab) { Logger.log('Cabeçalho "Nº Processo" não encontrado na aba Processos'); return; }
+  if (!cab) {
+    SpreadsheetApp.getUi().alert('ERRO: cabeçalho "Nº Processo" não encontrado na aba Processos.');
+    return;
+  }
   const { cabRow, headers } = cab;
 
-  // ── 1. ADEMIR × GOL (0812492-61) ──────────────────────
-  // Expedição de documentos + Juntada de Petição em 22/06
+  // ════════════════════════════════════════════════
+  // BLOCO A — E-mails de 17–20/06/2026
+  // ════════════════════════════════════════════════
+
+  // ── A1. WILBER × UNIÃO (5002092-77) ─────────────
+  // EPROC/JFRJ 20/06: intimação eletrônica Evento 11
+  atualizarLinhaPorNumero_(abaProc, todasLinhas, headers,
+    '5002092-77.2026.4.02.5102',
+    '20/06/2026',
+    'Expedida/certificada a intimação eletrônica — Evento 11 (JFRJ/EPROC — 20/06/2026)'
+  );
+  buscarEAtualizarCelula_(abaProc, todasLinhas, headers,
+    '5002092-77.2026.4.02.5102', headers.indexOf('Tipo Prazo'), 'Intimação Eletrônica');
+  buscarEAtualizarCelula_(abaProc, todasLinhas, headers,
+    '5002092-77.2026.4.02.5102', headers.indexOf('Data Limite'), '11/07/2026');
+  appendAgenda_(abaAg, {
+    data: '11/07/2026', tipo: 'Prazo Processual',
+    proc: '5002092-77.2026.4.02.5102 — Wilber × União/Fazenda Nacional',
+    cliente: 'Wilber Moreira Fonseca',
+    tribunal: '5ª VF — Niterói (JEF) / TRF2',
+    desc: 'PRAZO FATAL — Intimação eletrônica expedida (Evento 11, 20/06/2026). Verificar conteúdo no EPROC/JFRJ e providenciar resposta.',
+    resp: 'Luiz Fernando', prioridade: '🔴 Alta'
+  });
+
+  // ── A2. BRUNA/LUISA × ESTADO RJ (3110375-04) — NOVO ──
+  // Distribuído 17/06, publicado DJE 22/06
+  todasLinhas = abaProc.getDataRange().getValues(); // recarrega após possível inserção
+  const existeBruna = todasLinhas.some(r => normNum_(String(r[0])) === normNum_('3110375-04.2026.8.19.0001'));
+  if (!existeBruna) {
+    inserirProcessoGenerico_(abaProc, cabRow, headers, {
+      num:         '3110375-04.2026.8.19.0001',
+      cliente:     'Bruna Martins Ribeiro Ferreira / Luisa Ribeiro Ferreira',
+      area:        'Direito Cível',
+      tipo:        'Procedimento Comum Cível — Fazenda Pública',
+      orgao:       '17ª Vara da Fazenda Pública da Comarca da Capital — TJRJ',
+      fase:        'Distribuição',
+      poloAtivo:   'Bruna Martins Ribeiro Ferreira e Luisa Ribeiro Ferreira',
+      poloPassivo: 'Estado do Rio de Janeiro',
+      distrib:     '17/06/2026',
+      ultMov:      '17/06/2026',
+      descMov:     'Distribuído por sorteio em 17/06/2026 (14h26) — Magistrado: Manoel Tavares Cavalcanti — Publicação DJE/TJRJ em 22/06/2026 — Chave EPROC: 397388264626',
+      tipoPrazo:   'Prazo Processual',
+      resp:        'Kariny Barbosa / Luiz Fernando',
+      obs:         'Advogados: Kariny Barbosa OAB 241456/RJ e Luiz Fernando OAB 253413/RJ'
+    });
+  }
+  appendAgenda_(abaAg, {
+    data: '30/06/2026', tipo: 'Acompanhamento',
+    proc: '3110375-04.2026.8.19.0001 — Bruna e Luisa × Estado do Rio de Janeiro',
+    cliente: 'Bruna Martins Ribeiro Ferreira / Luisa Ribeiro Ferreira',
+    tribunal: '17ª Vara da Fazenda Pública — Capital — TJRJ',
+    desc: 'Processo novo distribuído em 17/06/2026. Verificar despacho inicial e intimações no eproc.tjrj. Publicação DJE em 22/06/2026.',
+    resp: 'Kariny Barbosa / Luiz Fernando', prioridade: '🟡 Média'
+  });
+
+  // ════════════════════════════════════════════════
+  // BLOCO B — E-mails de 23/06/2026 (PJe Push TJRJ)
+  // ════════════════════════════════════════════════
+
+  // Recarrega linhas após inserções do bloco A
+  todasLinhas = abaProc.getDataRange().getValues();
+
+  // ── B1. ADEMIR × GOL (0812492-61) ───────────────
   atualizarLinhaPorNumero_(abaProc, todasLinhas, headers,
     '0812492-61.2026.8.19.0038',
     '22/06/2026',
-    '22/06/2026 14:15 — Expedição de Outros documentos | 22/06/2026 14:10 — Juntada de Petição de petição (PJe Push TJRJ)'
+    '22/06/2026 14:15 — Expedição de Outros documentos | 22/06/2026 14:10 — Juntada de Petição (PJe Push TJRJ)'
   );
-  // Acompanhar o que foi expedido (pode ser intimação para audiência)
   appendAgenda_(abaAg, {
     data: '30/06/2026', tipo: 'Acompanhamento',
     proc: '0812492-61.2026.8.19.0038 — Ademir × GOL',
@@ -351,75 +421,96 @@ function aplicarAtualizacoesDeHoje() {
     resp: 'Kariny Barbosa', prioridade: '🟡 Média'
   });
 
-  // ── 2. VITOR × AZUL (0862248-73) — ⚠️ JULGADO IMPROCEDENTE ──
+  // ── B2. VITOR × AZUL (0862248-73) ⚠️ IMPROCEDENTE ──
   atualizarLinhaPorNumero_(abaProc, todasLinhas, headers,
     '0862248-73.2025.8.19.0038',
     '22/06/2026',
-    '22/06/2026 17:02 — JULGADO IMPROCEDENTE O PEDIDO | Homologação de Decisão de Juiz Leigo | Expedição de documentos (PJe Push TJRJ 22/06/2026)'
+    '22/06/2026 17:02 — JULGADO IMPROCEDENTE O PEDIDO | Homologação de Decisão de Juiz Leigo | Expedição de documentos (PJe Push TJRJ)'
   );
-  // Atualiza fase
-  const idxFase = headers.indexOf('Fase');
-  buscarEAtualizarCelula_(abaProc, todasLinhas, headers, '0862248-73.2025.8.19.0038', idxFase, 'Sentença — Improcedente');
-
-  // PRAZO URGENTE: Recurso Inominado — 15 dias da ciência
+  buscarEAtualizarCelula_(abaProc, todasLinhas, headers,
+    '0862248-73.2025.8.19.0038', headers.indexOf('Fase'), 'Sentença — Improcedente');
   appendAgenda_(abaAg, {
     data: '07/07/2026', tipo: 'Prazo Processual',
     proc: '0862248-73.2025.8.19.0038 — Vitor × Azul',
     cliente: 'Vitor Aguiar Vidon de Oliveira',
     tribunal: '2º JECível — Nova Iguaçu',
-    desc: '🚨 PRAZO FATAL — Pedido JULGADO IMPROCEDENTE em 22/06/2026 (homologação de juiz leigo). Verificar publicação oficial e decidir com cliente sobre Recurso Inominado (prazo: 15 dias da ciência). Avaliar fundamentos para recurso.',
+    desc: '🚨 PRAZO FATAL — JULGADO IMPROCEDENTE em 22/06/2026. Verificar publicação oficial e decidir com cliente sobre Recurso Inominado (15 dias da ciência).',
     resp: 'Kariny Barbosa', prioridade: '🔴 Alta'
   });
 
-  // ── 3. WALLACE × DETRAN (0804503-97) — PROCESSO NOVO ──
-  // Não está na planilha. Inserir como novo processo.
-  const jaExiste = todasLinhas.some(r => normNum_(String(r[0])) === normNum_('0804503-97.2025.8.19.0083'));
-  if (!jaExiste) {
-    const linhasAtual = abaProc.getDataRange().getValues();
-    let linhaIns = linhasAtual.length + 1;
-    for (let r = cabRow + 1; r < linhasAtual.length; r++) {
-      const v = String(linhasAtual[r][0]).trim();
-      if (v === '' || v.startsWith('⚖')) { linhaIns = r + 1; break; }
-    }
-    const novaLinha = new Array(headers.length).fill('');
-    function s(col, val) { const i = headers.indexOf(col); if (i >= 0) novaLinha[i] = val; }
-    s('Nº Processo',             '0804503-97.2025.8.19.0083');
-    s('ID',                      '—');
-    s('Cliente',                 'Wallace da Rosa Candido');
-    s('Área',                    'Direito Administrativo / Trânsito');
-    s('Tipo de Ação',            'Procedimento Comum Cível — Indenização por Dano Moral');
-    s('Tribunal / Órgão',        '5º Núcleo de Justiça 4.0 — Causas Fazendárias até 60 SM — TJRJ');
-    s('Status',                  'Ativo');
-    s('Fase',                    'Instrução');
-    s('Polo Ativo',              'Wallace da Rosa Candido');
-    s('Polo Passivo',            'DETRAN — Departamento de Trânsito do Estado do Rio de Janeiro e Outros');
-    s('Valor',                   'A definir');
-    s('Distribuição',            '15/11/2025');
-    s('Últ. Mov.',               '22/06/2026');
-    s('Desc. Últ. Movimentação', '22/06/2026 00:47 — Decorrido prazo do DETRAN em 19/06/2026 23:59 — Prazo da parte ré encerrado (PJe Push TJRJ 23/06/2026)');
-    s('Tipo Prazo',              'Prazo Processual');
-    s('Observações',             'Inserido automaticamente. Autuado em 15/11/2025. Prazo do DETRAN decorrido — verificar se cabe decretação de revelia ou despacho do juiz.');
-    abaProc.insertRowBefore(linhaIns);
-    abaProc.getRange(linhaIns, 1, 1, novaLinha.length).setValues([novaLinha]);
-    Logger.log('Processo Wallace/DETRAN inserido');
+  // ── B3. WALLACE × DETRAN (0804503-97) — NOVO ────
+  todasLinhas = abaProc.getDataRange().getValues();
+  const existeWallace = todasLinhas.some(r => normNum_(String(r[0])) === normNum_('0804503-97.2025.8.19.0083'));
+  if (!existeWallace) {
+    inserirProcessoGenerico_(abaProc, cabRow, headers, {
+      num:         '0804503-97.2025.8.19.0083',
+      cliente:     'Wallace da Rosa Candido',
+      area:        'Direito Administrativo / Trânsito',
+      tipo:        'Procedimento Comum Cível — Indenização por Dano Moral',
+      orgao:       '5º Núcleo de Justiça 4.0 — Causas Fazendárias até 60 SM — TJRJ',
+      fase:        'Instrução',
+      poloAtivo:   'Wallace da Rosa Candido',
+      poloPassivo: 'DETRAN — Departamento de Trânsito do Estado do Rio de Janeiro e Outros',
+      distrib:     '15/11/2025',
+      ultMov:      '22/06/2026',
+      descMov:     '22/06/2026 00:47 — Decorrido prazo do DETRAN em 19/06/2026 23:59 — Prazo da parte ré encerrado (PJe Push TJRJ 23/06/2026)',
+      tipoPrazo:   'Prazo Processual',
+      resp:        'Luiz Fernando / Kariny Barbosa',
+      obs:         'Autuado em 15/11/2025. Prazo do DETRAN decorrido — verificar revelia ou despacho.'
+    });
   }
-
   appendAgenda_(abaAg, {
     data: '30/06/2026', tipo: 'Prazo Processual',
     proc: '0804503-97.2025.8.19.0083 — Wallace × DETRAN e Outros',
     cliente: 'Wallace da Rosa Candido',
     tribunal: '5º Núcleo Justiça 4.0 — Causas Fazendárias — TJRJ',
-    desc: 'Prazo do DETRAN DECORRIDO em 19/06/2026. Verificar se há despacho do juiz decretando revelia ou determinando próximo passo. Acessar PJe/TJRJ para acompanhar.',
+    desc: 'Prazo do DETRAN DECORRIDO em 19/06/2026. Verificar despacho do juiz — possível decretação de revelia. Acessar PJe/TJRJ.',
     resp: 'Luiz Fernando / Kariny Barbosa', prioridade: '🟠 Alta'
   });
 
   SpreadsheetApp.getUi().alert(
-    '✅ Atualizações de 23/06/2026 aplicadas!\n\n' +
-    '• Ademir × GOL (0812492-61): movimentação de 22/06 registrada\n' +
-    '• Vitor × Azul (0862248-73): ⚠️ JULGADO IMPROCEDENTE — prazo recurso 07/07\n' +
-    '• Wallace × DETRAN (0804503-97): processo novo inserido — prazo DETRAN decorrido\n\n' +
-    '⚠️ ATENÇÃO: Verificar urgentemente o recurso do processo do Vitor (Azul)!'
+    '✅ Todas as atualizações pendentes aplicadas!\n\n' +
+    'BLOCO A — E-mails 17–20/06:\n' +
+    '• Wilber × União (5002092-77): intimação Evento 11 — prazo 11/07\n' +
+    '• Bruna/Luisa × Estado RJ (3110375-04): processo novo inserido\n\n' +
+    'BLOCO B — E-mails 23/06:\n' +
+    '• Ademir × GOL (0812492-61): movimentação 22/06 registrada\n' +
+    '• Vitor × Azul (0862248-73): ⚠️ IMPROCEDENTE — prazo recurso 07/07\n' +
+    '• Wallace × DETRAN (0804503-97): processo novo inserido\n\n' +
+    '⚠️ URGENTE: verificar recurso do Vitor (Azul) — prazo 07/07/2026!'
   );
+}
+
+// Helper interno: insere novo processo na aba Processos
+function inserirProcessoGenerico_(aba, cabRow, headers, p) {
+  const linhas = aba.getDataRange().getValues();
+  let linhaIns = linhas.length + 1;
+  for (let r = cabRow + 1; r < linhas.length; r++) {
+    const v = String(linhas[r][0]).trim();
+    if (v === '' || v.startsWith('⚖')) { linhaIns = r + 1; break; }
+  }
+  const nova = new Array(headers.length).fill('');
+  function s(col, val) { const i = headers.indexOf(col); if (i >= 0) nova[i] = val || ''; }
+  s('Nº Processo',             p.num);
+  s('ID',                      '—');
+  s('Cliente',                 p.cliente);
+  s('Área',                    p.area);
+  s('Tipo de Ação',            p.tipo);
+  s('Tribunal / Órgão',        p.orgao);
+  s('Status',                  'Ativo');
+  s('Fase',                    p.fase);
+  s('Polo Ativo',              p.poloAtivo);
+  s('Polo Passivo',            p.poloPassivo);
+  s('Valor',                   'A definir');
+  s('Distribuição',            p.distrib);
+  s('Últ. Mov.',               p.ultMov);
+  s('Desc. Últ. Movimentação', p.descMov);
+  s('Tipo Prazo',              p.tipoPrazo);
+  s('Responsável',             p.resp);
+  s('Observações',             p.obs);
+  aba.insertRowBefore(linhaIns);
+  aba.getRange(linhaIns, 1, 1, nova.length).setValues([nova]);
+  Logger.log('Inserido: ' + p.num + ' (' + p.cliente + ')');
 }
 
 // ──────────────────────────────────────────────────────────
