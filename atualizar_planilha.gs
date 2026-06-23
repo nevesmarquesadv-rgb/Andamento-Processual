@@ -22,9 +22,9 @@
 // ──────────────────────────────────────────────────────────
 const CONFIG = {
   spreadsheetId: '1X8BX-jsHsN5AcjdxmpePp2baVqGA3hKMZcWHPxZrO44',
-  abaProcessos:  'Processos',
-  abaAgenda:     'Agenda',
-  diasRetroativos: 2,   // quantos dias para trás buscar e-mails não processados
+  abaProcessos:  'Processos',  // palavra-chave — busca por nome parcial
+  abaAgenda:     'Agenda',     // palavra-chave — busca por nome parcial
+  diasRetroativos: 2,
   labelProcessado: 'PJe-Processado',
 
   // Remetentes judiciais reconhecidos
@@ -40,7 +40,7 @@ const CONFIG = {
 // PONTO DE ENTRADA PRINCIPAL
 // ──────────────────────────────────────────────────────────
 function processarEmailsJudiciais() {
-  const ss = SpreadsheetApp.openById(CONFIG.spreadsheetId);
+  const ss = getPlanilha_();
   garantirLabelProcessado_();
 
   const query = buildGmailQuery_();
@@ -190,8 +190,8 @@ function extrairRecorteDigital_(corpo, dataEmail) {
 function aplicarNaPlanilha_(ss, dados) {
   const resultado = { novo: false, atualizado: false, alerta: null };
 
-  const abaProc = ss.getSheetByName(CONFIG.abaProcessos);
-  if (!abaProc) return resultado;
+  const abaProc = getSheet_(ss, CONFIG.abaProcessos);
+  if (!abaProc) { Logger.log('Aba Processos não encontrada'); return resultado; }
 
   const todasLinhas = abaProc.getDataRange().getValues();
   const cab = encontrarCabecalho_(todasLinhas, 'Nº Processo');
@@ -278,7 +278,7 @@ function inserirNovoProcesso_(aba, dados, cabRow, headers) {
 }
 
 function adicionarAgenda_(ss, dados, linhaProc, headers, urgente) {
-  const abaAg = ss.getSheetByName(CONFIG.abaAgenda);
+  const abaAg = getSheet_(ss, CONFIG.abaAgenda);
   if (!abaAg) return;
 
   const todasLinhas = abaAg.getDataRange().getValues();
@@ -322,13 +322,16 @@ function adicionarAgenda_(ss, dados, linhaProc, headers, urgente) {
 // 3 e-mails do PJe Push recebidos hoje.
 // ──────────────────────────────────────────────────────────
 function aplicarAtualizacoesDeHoje() {
-  const ss = SpreadsheetApp.openById(CONFIG.spreadsheetId);
-  const abaProc = ss.getSheetByName(CONFIG.abaProcessos);
-  const abaAg   = ss.getSheetByName(CONFIG.abaAgenda);
+  const ss      = getPlanilha_();
+  const abaProc = getSheet_(ss, CONFIG.abaProcessos);
+  const abaAg   = getSheet_(ss, CONFIG.abaAgenda);
+
+  if (!abaProc) { Logger.log('ERRO: aba Processos não encontrada. Abas disponíveis: ' + ss.getSheets().map(s => s.getName()).join(', ')); return; }
+  if (!abaAg)   { Logger.log('ERRO: aba Agenda não encontrada. Abas disponíveis: '    + ss.getSheets().map(s => s.getName()).join(', ')); return; }
 
   const todasLinhas = abaProc.getDataRange().getValues();
   const cab = encontrarCabecalho_(todasLinhas, 'Nº Processo');
-  if (!cab) { Logger.log('Cabeçalho não encontrado'); return; }
+  if (!cab) { Logger.log('Cabeçalho "Nº Processo" não encontrado na aba Processos'); return; }
   const { cabRow, headers } = cab;
 
   // ── 1. ADEMIR × GOL (0812492-61) ──────────────────────
@@ -460,6 +463,40 @@ function configurarTriggerDiario() {
 // ──────────────────────────────────────────────────────────
 // UTILITÁRIOS INTERNOS
 // ──────────────────────────────────────────────────────────
+
+/**
+ * Retorna a planilha: usa getActiveSpreadsheet() quando o script
+ * está vinculado à planilha (execução manual ou trigger), com
+ * fallback para openById (execução externa).
+ */
+function getPlanilha_() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) return ss;
+  } catch(e) {}
+  return SpreadsheetApp.openById(CONFIG.spreadsheetId);
+}
+
+/**
+ * Busca uma aba cujo nome CONTENHA a palavra-chave (case-insensitive).
+ * Resolve o problema de abas com prefixos emoji (ex: "⚖ Processos").
+ */
+function getSheet_(ss, keyword) {
+  const kw = keyword.toLowerCase().trim();
+  const sheets = ss.getSheets();
+  // 1. Tenta match exato primeiro
+  for (const s of sheets) {
+    if (s.getName().trim() === keyword) return s;
+  }
+  // 2. Match parcial (ignora emoji e espaços extras)
+  for (const s of sheets) {
+    if (s.getName().toLowerCase().includes(kw)) return s;
+  }
+  // 3. Loga abas disponíveis para diagnóstico
+  Logger.log(`Aba "${keyword}" não encontrada. Abas disponíveis: ${sheets.map(s => '"' + s.getName() + '"').join(', ')}`);
+  return null;
+}
+
 function buildGmailQuery_() {
   const from = CONFIG.remetentes.map(r => `from:${r}`).join(' OR ');
   return `(${from}) newer_than:${CONFIG.diasRetroativos}d -label:${CONFIG.labelProcessado}`;
