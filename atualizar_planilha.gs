@@ -50,6 +50,7 @@ const CONFIG = {
   abaAgenda:       'Agenda',     // palavra-chave — busca por nome parcial
   diasRetroativos: 2,
   labelProcessado: 'PJe-Processado',
+  labelRevisar:    'PJe-Revisar',   // e-mail judicial que o parser não interpretou
 
   // Remetentes judiciais reconhecidos
   remetentes: [
@@ -66,6 +67,7 @@ const CFG = {
   EMAIL_LUIZ        : 'nevesmarquesadv@gmail.com',
   EMAIL_KARINY      : 'PREENCHA_EMAIL_KARINY@gmail.com',   // <<< preencher
   DIAS_ALERTA       : 7,
+  MAX_BACKUPS       : 8,   // nº de backups semanais mantidos; o excedente vai p/ lixeira
 
   SUBPASTAS: [
     '📄 Documentos Pessoais',
@@ -203,6 +205,7 @@ function onOpen() {
 function processarEmailsJudiciais() {
   const ss = getPlanilha_();
   garantirLabelProcessado_();
+  garantirLabelRevisar_();
 
   const query = buildGmailQuery_();
   const threads = GmailApp.search(query, 0, 50);
@@ -211,17 +214,23 @@ function processarEmailsJudiciais() {
   let totalAtualizados = 0;
   let totalNovos = 0;
   let alertasUrgentes = [];
+  let paraRevisar = [];
 
   for (const thread of threads) {
-    if (jaProcessado_(thread)) continue;
+    if (jaProcessado_(thread) || jaParaRevisar_(thread)) continue;
+
+    let reconhecidos = 0; // mensagens de remetente judicial reconhecido
+    let extraidos = 0;    // mensagens que o parser conseguiu interpretar
 
     for (const msg of thread.getMessages()) {
       const remetente = msg.getFrom();
       if (!remetenteReconhecido_(remetente)) continue;
+      reconhecidos++;
 
       const corpo = msg.getPlainBody() + msg.getBody();
       const dados = extrairDadosEmail_(corpo, remetente, msg.getDate());
       if (!dados) continue;
+      extraidos++;
 
       const resultado = aplicarNaPlanilha_(ss, dados);
       if (resultado.novo)       totalNovos++;
@@ -229,14 +238,32 @@ function processarEmailsJudiciais() {
       if (resultado.alerta)     alertasUrgentes.push(resultado.alerta);
     }
 
-    marcarComoProcessado_(thread);
+    if (extraidos > 0) {
+      // Pelo menos uma movimentação foi interpretada e gravada.
+      marcarComoProcessado_(thread);
+    } else if (reconhecidos > 0) {
+      // E-mail judicial que o parser NÃO conseguiu interpretar
+      // (ex.: o tribunal mudou o layout). NÃO marca como processado:
+      // sinaliza para revisão humana e avisa os sócios, evitando
+      // perda silenciosa de andamento/prazo.
+      marcarParaRevisar_(thread);
+      paraRevisar.push(thread);
+      Logger.log('[REVISAR] Não foi possível extrair dados — ' + thread.getFirstMessageSubject());
+    } else {
+      // Nada reconhecido nesta thread — marca como processado p/ não rescanear.
+      marcarComoProcessado_(thread);
+    }
   }
 
-  Logger.log(`Resultado: ${totalAtualizados} atualizados, ${totalNovos} novos processos`);
-  registrarLog('Andamento Processual: ' + totalAtualizados + ' atualizado(s), ' + totalNovos + ' novo(s).');
+  Logger.log(`Resultado: ${totalAtualizados} atualizados, ${totalNovos} novos processos, ${paraRevisar.length} p/ revisão`);
+  registrarLog('Andamento Processual: ' + totalAtualizados + ' atualizado(s), ' + totalNovos
+    + ' novo(s), ' + paraRevisar.length + ' p/ revisão.');
 
   if (alertasUrgentes.length > 0) {
     enviarAlertaEmail_(alertasUrgentes);
+  }
+  if (paraRevisar.length > 0) {
+    enviarAvisoRevisao_(paraRevisar);
   }
 }
 
@@ -449,18 +476,23 @@ function adicionarAgenda_(ss, dados, linhaProc, headers, urgente) {
 
   const { headers: hAg } = cab;
 
-  // Evita duplicação
-  for (let r = 0; r < todasLinhas.length; r++) {
-    if (normNum_(String(todasLinhas[r][0])) === normNum_(dados.numProcesso) &&
-        String(todasLinhas[r][hAg.indexOf('Nº Processo / Ref.')]).includes(dados.numProcesso)) return;
-  }
-
   const cliente    = linhaProc ? linhaProc[headers.indexOf('Cliente')] : (dados.poloAtivo || 'A identificar');
   const tribunal   = linhaProc ? linhaProc[headers.indexOf('Tribunal / Órgão')] : (dados.orgao || '');
   const responsavel= linhaProc ? linhaProc[headers.indexOf('Responsável')] : '';
 
   const prazoData  = urgente ? calcularPrazo_(dados.ultimaMovData, 15) : calcularPrazo_(dados.ultimaMovData, 7);
   const prazoStr   = Utilities.formatDate(prazoData, 'America/Sao_Paulo', 'dd/MM/yyyy');
+
+  // Evita duplicação: mesma data de prazo + mesmo número de processo.
+  // (compara data normalizada — a célula pode ser Date ou texto.)
+  const colData = hAg.indexOf('Data');
+  const colRef  = hAg.indexOf('Nº Processo / Ref.');
+  const numProc = normNum_(dados.numProcesso);
+  for (let r = cab.cabRow + 1; r < todasLinhas.length; r++) {
+    const dataCel = normalizarDataParaTexto_(todasLinhas[r][colData >= 0 ? colData : 0]);
+    const refCel  = normNum_(String(todasLinhas[r][colRef >= 0 ? colRef : 0]));
+    if (numProc.length > 0 && dataCel === prazoStr && refCel.includes(numProc)) return;
+  }
 
   const novaLinha  = new Array(hAg.length).fill('');
   function s(col, val) { const i = hAg.indexOf(col); if (i >= 0) novaLinha[i] = val; }
@@ -692,7 +724,7 @@ function atualizarKPIs() {
     const totalProcessos  = contarLinhas(ss, 'Processos', 7,  'Ativo',  '');
     const prazosNaSemana  = contarPrazosNaSemana(ss);
 
-    const dash = ss.getSheetByName('Dashboard');
+    const dash = getSheet_(ss, 'Dashboard');
     if (!dash) return;
 
     // KPIs ficam na linha 3: col A=prospectos, E=clientes, I=processos, M=prazos
@@ -713,7 +745,7 @@ function atualizarKPIs() {
 }
 
 function contarProspectosAtivos(ss) {
-  const aba = ss.getSheetByName('Prospectos');
+  const aba = getSheet_(ss, 'Prospectos');
   if (!aba) return 0;
   const dados = aba.getDataRange().getValues();
   const ESTAGIOS_INATIVOS = ['Convertido', 'Perdido', 'Descartado', 'Encerrado'];
@@ -728,7 +760,7 @@ function contarProspectosAtivos(ss) {
 }
 
 function contarLinhas(ss, nomeAba, colStatus, valorStatus, prefixoId) {
-  const aba = ss.getSheetByName(nomeAba);
+  const aba = getSheet_(ss, nomeAba);
   if (!aba) return 0;
   const dados = aba.getDataRange().getValues();
   let count = 0;
@@ -743,7 +775,7 @@ function contarLinhas(ss, nomeAba, colStatus, valorStatus, prefixoId) {
 }
 
 function contarPrazosNaSemana(ss) {
-  const aba = ss.getSheetByName('Agenda');
+  const aba = getSheet_(ss, 'Agenda');
   if (!aba) return 0;
   const dados = aba.getDataRange().getValues();
   const hoje = new Date(); hoje.setHours(0,0,0,0);
@@ -767,7 +799,7 @@ function contarPrazosNaSemana(ss) {
 function onEditTrigger(e) {
   try {
     const sheet = e.source.getActiveSheet();
-    if (sheet.getName() !== 'Clientes') return;
+    if (!ehAba_(sheet, 'Clientes')) return;
 
     const row = e.range.getRow();
     const col = e.range.getColumn();
@@ -794,7 +826,10 @@ function onEditTrigger(e) {
       registrarLog('PASTA CRIADA automaticamente: ' + nomePasta);
     }
 
-    atualizarKPIs();
+    // Não recalcula KPIs de forma síncrona a cada célula editada
+    // (colar várias linhas dispararia N recálculos). Marca como
+    // "sujo" e agenda um único recálculo ~1 min depois.
+    marcarKPIsParaRecalculo_();
 
   } catch (err) {
     registrarLog('ERRO onEditTrigger: ' + err.message);
@@ -826,7 +861,7 @@ function criarPastaComSubpastas(nomePasta) {
 function verificarPrazos() {
   try {
     const ss   = SpreadsheetApp.getActiveSpreadsheet();
-    const aba  = ss.getSheetByName('Agenda');
+    const aba  = getSheet_(ss, 'Agenda');
     if (!aba) return;
 
     const dados = aba.getDataRange().getValues();
@@ -955,12 +990,43 @@ function _enviarEmailPrazos(urgentes, normais, vencidos, ssId) {
 function backupSemanal() {
   try {
     const ss    = SpreadsheetApp.getActiveSpreadsheet();
-    const hoje  = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'yyyy-MM-dd');
+    const hoje  = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'yyyy-MM-dd HH-mm');
     const nome  = 'Dashboard - Escritório [Backup ' + hoje + ']';
-    DriveApp.getFileById(ss.getId()).makeCopy(nome);
-    registrarLog('Backup criado: ' + nome);
+    const arq   = DriveApp.getFileById(ss.getId());
+    const pasta = _pastaBackups_(arq);
+    arq.makeCopy(nome, pasta);
+    registrarLog('Backup criado: ' + nome + ' (pasta: ' + pasta.getName() + ')');
+    _expurgarBackupsAntigos_(pasta, CFG.MAX_BACKUPS);
   } catch (err) {
     registrarLog('ERRO backupSemanal: ' + err.message);
+  }
+}
+
+// Localiza (ou cria) uma subpasta dedicada de backups na mesma pasta
+// onde o Dashboard está; cai para a raiz do Drive se não houver pai.
+function _pastaBackups_(arqPlanilha) {
+  const NOME = '🗄️ Backups - Dashboard';
+  const pais = arqPlanilha.getParents();
+  const parent = pais.hasNext() ? pais.next() : DriveApp.getRootFolder();
+  const it = parent.getFoldersByName(NOME);
+  return it.hasNext() ? it.next() : parent.createFolder(NOME);
+}
+
+// Mantém apenas os N backups mais recentes; manda o excedente p/ lixeira.
+function _expurgarBackupsAntigos_(pasta, manter) {
+  manter = manter || 8;
+  const arquivos = [];
+  const it = pasta.getFilesByType(MimeType.GOOGLE_SHEETS);
+  while (it.hasNext()) {
+    const f = it.next();
+    if (f.getName().indexOf('[Backup') !== -1) {
+      arquivos.push({ f: f, data: f.getDateCreated() });
+    }
+  }
+  arquivos.sort(function(a, b) { return b.data - a.data; }); // mais recente primeiro
+  for (let i = manter; i < arquivos.length; i++) {
+    arquivos[i].f.setTrashed(true);
+    registrarLog('Backup antigo p/ lixeira: ' + arquivos[i].f.getName());
   }
 }
 
@@ -1055,7 +1121,7 @@ function _gerarDocumento(tipo) {
     const aba = ss.getActiveSheet();
 
     // Valida que o usuário está na aba Clientes
-    if (aba.getName() !== 'Clientes') {
+    if (!ehAba_(aba, 'Clientes')) {
       ui.alert('⚠️ Atenção',
         'Para gerar um documento, primeiro selecione uma linha na aba "Clientes".',
         ui.ButtonSet.OK);
@@ -1344,7 +1410,7 @@ function _r3_kpis(ss) {
 }
 
 function _r3_financeiro(ss) {
-  const aba = ss.getSheetByName('Financeiro');
+  const aba = getSheet_(ss, 'Financeiro');
   if (!aba) return { recebido: 0, pendente: 0 };
 
   const dados    = aba.getDataRange().getValues();
@@ -1371,7 +1437,7 @@ function _r3_financeiro(ss) {
 }
 
 function _r3_agenda(ss, inicio, fim) {
-  const aba = ss.getSheetByName('Agenda');
+  const aba = getSheet_(ss, 'Agenda');
   if (!aba) return [];
   const dados  = aba.getDataRange().getValues();
   const result = [];
@@ -1402,7 +1468,7 @@ function _r3_agenda(ss, inicio, fim) {
 }
 
 function _r3_processosInativos(ss) {
-  const aba   = ss.getSheetByName('Processos');
+  const aba   = getSheet_(ss, 'Processos');
   if (!aba) return [];
   const dados = aba.getDataRange().getValues();
   const hoje  = new Date(); hoje.setHours(0,0,0,0);
@@ -1441,7 +1507,7 @@ function _r3_porAdvogado(ss) {
   const dist = {};
 
   // Contagem de processos
-  const abaP = ss.getSheetByName('Processos');
+  const abaP = getSheet_(ss, 'Processos');
   if (abaP) {
     abaP.getDataRange().getValues().forEach(function(row) {
       const nr   = String(row[0] || '').trim();
@@ -1455,7 +1521,7 @@ function _r3_porAdvogado(ss) {
   }
 
   // Contagem de clientes
-  const abaC = ss.getSheetByName('Clientes');
+  const abaC = getSheet_(ss, 'Clientes');
   if (abaC) {
     abaC.getDataRange().getValues().forEach(function(row) {
       const id   = String(row[0] || '').trim();
@@ -1472,7 +1538,7 @@ function _r3_porAdvogado(ss) {
 }
 
 function _r3_porArea(ss) {
-  const aba  = ss.getSheetByName('Processos');
+  const aba  = getSheet_(ss, 'Processos');
   if (!aba) return {};
   const areas = {};
   aba.getDataRange().getValues().forEach(function(row) {
@@ -1487,7 +1553,7 @@ function _r3_porArea(ss) {
 }
 
 function _r3_prospectos(ss) {
-  const aba  = ss.getSheetByName('Prospectos');
+  const aba  = getSheet_(ss, 'Prospectos');
   if (!aba) return [];
   const INATIVOS = ['Convertido', 'Perdido', 'Descartado', 'Encerrado'];
   const result = [];
@@ -1510,7 +1576,7 @@ function _r3_prospectos(ss) {
 }
 
 function _r3_aniversarios(ss, inicio, fim) {
-  const aba = ss.getSheetByName('Clientes');
+  const aba = getSheet_(ss, 'Clientes');
   if (!aba) return [];
   const result = [];
   const anoAtual = new Date().getFullYear();
@@ -1973,7 +2039,7 @@ function _f4_coletarAndamentos(nomeCliente, limite) {
 }
 
 function _f4_buscarProcessos(idCliente) {
-  const aba  = SpreadsheetApp.getActive().getSheetByName('Processos');
+  const aba  = getSheet_(SpreadsheetApp.getActive(), 'Processos');
   if (!aba) return '';
 
   const dados  = aba.getDataRange().getValues();
@@ -1999,7 +2065,7 @@ function analisarClienteSelecionado() {
   const aba  = ss.getActiveSheet();
   const row  = aba.getActiveRange().getRow();
 
-  if (aba.getName() !== 'Clientes' || row < 5) {
+  if (!ehAba_(aba, 'Clientes') || row < 5) {
     ss.toast('Selecione uma linha na aba "Clientes" (linha 5 ou abaixo)', '⚠️ Atenção', 5);
     return;
   }
@@ -2060,7 +2126,7 @@ function analisarTodosProcessos() {
   if (conf !== ui.Button.YES) return;
 
   const ss          = SpreadsheetApp.getActive();
-  const abaClientes = ss.getSheetByName('Clientes');
+  const abaClientes = getSheet_(ss, 'Clientes');
   const dados       = abaClientes.getDataRange().getValues();
   let   processados = 0;
   let   erros       = 0;
@@ -2114,7 +2180,7 @@ function gerarRascunhoPeticao() {
   const aba = ss.getActiveSheet();
   const row = aba.getActiveRange().getRow();
 
-  if (aba.getName() !== 'Clientes' || row < 5) {
+  if (!ehAba_(aba, 'Clientes') || row < 5) {
     ss.toast('Selecione um cliente na aba "Clientes" (linha 5 ou abaixo)', '⚠️ Atenção', 5);
     return;
   }
@@ -2537,7 +2603,7 @@ function getSheet_(ss, keyword) {
 
 function buildGmailQuery_() {
   const from = CONFIG.remetentes.map(r => `from:${r}`).join(' OR ');
-  return `(${from}) newer_than:${CONFIG.diasRetroativos}d -label:${CONFIG.labelProcessado}`;
+  return `(${from}) newer_than:${CONFIG.diasRetroativos}d -label:${CONFIG.labelProcessado} -label:${CONFIG.labelRevisar}`;
 }
 
 function garantirLabelProcessado_() {
@@ -2601,13 +2667,21 @@ function buscarEAtualizarCelula_(aba, linhas, headers, numProc, colIdx, valor) {
 function appendAgenda_(abaAg, item) {
   if (!abaAg) return;
   const linhas = abaAg.getDataRange().getValues();
-  // Evita duplicação pelo número do processo + data
-  for (const r of linhas) {
-    if (String(r[0]) === item.data && String(r[3]).includes(item.proc.split(' ')[0])) return;
-  }
   const cab = encontrarCabecalho_(linhas, 'Data');
   if (!cab) return;
   const h = cab.headers;
+
+  // Evita duplicação: mesmo número de processo + mesma data (normalizada),
+  // usando o índice real das colunas (não posições fixas).
+  const colData = h.indexOf('Data');
+  const colRef  = h.indexOf('Nº Processo / Ref.');
+  const numItem = normNum_(item.proc.split(' ')[0]);
+  for (let r = cab.cabRow + 1; r < linhas.length; r++) {
+    const dataCel = normalizarDataParaTexto_(linhas[r][colData >= 0 ? colData : 0]);
+    const refCel  = normNum_(String(linhas[r][colRef >= 0 ? colRef : 0]));
+    if (numItem.length > 0 && dataCel === item.data && refCel.includes(numItem)) return;
+  }
+
   const linha = new Array(h.length).fill('');
   function s(col, val) { const i = h.indexOf(col); if (i >= 0) linha[i] = val; }
   s('Data', item.data);
@@ -2690,4 +2764,115 @@ function limpar_(str) {
 
 function normNum_(str) {
   return str.replace(/[^0-9]/g, '');
+}
+
+// ──────────────────────────────────────────────────────────
+// HELPERS DO PACOTE DE SEGURANÇA (itens 1–5)
+// ──────────────────────────────────────────────────────────
+
+/**
+ * Compara o nome de uma aba a uma palavra-chave de forma tolerante
+ * a emoji/acentos/espaços (ex.: "👥 Clientes" casa com "Clientes").
+ */
+function ehAba_(sheet, keyword) {
+  if (!sheet) return false;
+  const nome = String(sheet.getName()).toLowerCase().trim();
+  const kw   = String(keyword).toLowerCase().trim();
+  return nome === kw || nome.includes(kw);
+}
+
+/**
+ * Converte um valor de célula (Date ou texto) para "dd/MM/yyyy".
+ * Usado na deduplicação de prazos para comparar datas com segurança.
+ */
+function normalizarDataParaTexto_(v) {
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    return Utilities.formatDate(v, 'America/Sao_Paulo', 'dd/MM/yyyy');
+  }
+  const s = String(v || '').trim();
+  const m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return ('0' + m[1]).slice(-2) + '/' + ('0' + m[2]).slice(-2) + '/' + m[3];
+  return s;
+}
+
+// ----- R5: recálculo de KPIs com "debounce" (1 trigger pendente) -----
+
+function marcarKPIsParaRecalculo_() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    props.setProperty('KPIS_DIRTY', '1');
+    const jaTem = ScriptApp.getProjectTriggers().some(function(t) {
+      return t.getHandlerFunction() === 'recalcularKPIsSeNecessario';
+    });
+    if (!jaTem) {
+      ScriptApp.newTrigger('recalcularKPIsSeNecessario')
+        .timeBased().after(60 * 1000).create();
+    }
+  } catch (e) {
+    // Em último caso, recalcula de forma síncrona para não perder a atualização.
+    try { atualizarKPIs(); } catch (e2) {}
+  }
+}
+
+function recalcularKPIsSeNecessario() {
+  // Remove este gatilho one-shot (evita acúmulo de triggers).
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'recalcularKPIsSeNecessario') ScriptApp.deleteTrigger(t);
+  });
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('KPIS_DIRTY') === '1') {
+    props.deleteProperty('KPIS_DIRTY');
+    atualizarKPIs();
+  }
+}
+
+// ----- R1: revisão humana de e-mails que o parser não interpretou -----
+
+function garantirLabelRevisar_() {
+  try {
+    GmailApp.getUserLabelByName(CONFIG.labelRevisar) ||
+    GmailApp.createLabel(CONFIG.labelRevisar);
+  } catch (e) {}
+}
+
+function jaParaRevisar_(thread) {
+  return thread.getLabels().some(l => l.getName() === CONFIG.labelRevisar);
+}
+
+function marcarParaRevisar_(thread) {
+  try {
+    const label = GmailApp.getUserLabelByName(CONFIG.labelRevisar);
+    if (label) thread.addLabel(label);
+  } catch (e) {}
+}
+
+function enviarAvisoRevisao_(threads) {
+  try {
+    const destinos = _r3_destinos() || CFG.EMAIL_LUIZ;
+    if (!destinos) return;
+
+    let lista = '';
+    threads.forEach(function(t) {
+      const assunto = t.getFirstMessageSubject() || '(sem assunto)';
+      const url     = t.getPermalink();
+      lista += '• ' + assunto + '\n  ' + url + '\n\n';
+    });
+
+    const corpo =
+      'Os e-mails abaixo são de remetentes judiciais reconhecidos (PJe / EPROC / ' +
+      'Recorte Digital), mas a automação NÃO conseguiu extrair os dados ' +
+      '(número do processo, movimentação, etc.).\n\n' +
+      'Isso geralmente indica que o tribunal mudou o layout do e-mail. ' +
+      'Eles foram marcados com a etiqueta "' + CONFIG.labelRevisar + '" no Gmail e ' +
+      'NÃO foram lançados automaticamente — revise manualmente para não perder prazo:\n\n' +
+      lista +
+      '--- Neves Marques Advocacia (verificação automática)';
+
+    GmailApp.sendEmail(destinos,
+      '⚠️ ' + threads.length + ' e-mail(s) judicial(is) precisam de revisão manual',
+      corpo);
+    registrarLog('Aviso de revisão enviado: ' + threads.length + ' e-mail(s) p/ ' + destinos);
+  } catch (e) {
+    registrarLog('ERRO enviarAvisoRevisao_: ' + e.message);
+  }
 }
