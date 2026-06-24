@@ -28,6 +28,37 @@ pastas, prazos, backup, migração, log), **Fase 2** (Procuração/Contrato),
 | 4 | R5 — KPIs recalculados a cada célula | `onEditTrigger` marca "KPIs sujos" e agenda **um** recálculo (`recalcularKPIsSeNecessario`, ~1 min depois). |
 | 5 | R7 — backups acumulam sem limite | Backups vão para a subpasta `🗄️ Backups - Dashboard`; mantém os últimos `CFG.MAX_BACKUPS` (8). |
 
+## ✅ Implementado — FASE 1 (Modelo de Dados e Abas)
+
+- **Camada central de resolução de abas** (`resolverAba_` + `_normNome_`):
+  tolerante a emoji, acento, caixa, espaços e variações de nome. O `getSheet_`
+  agora delega para ela — toda a automação herda essa robustez.
+- **`SCHEMA`**: fonte única da verdade com as 13 abas e suas colunas propostas
+  (Configurações, Clientes, Processos, Agenda, Andamentos, Tarefas, Documentos,
+  Financeiro, CRM/Oportunidades, IA_Log, Auditoria, Erros, Backups).
+- **`auditarEstrutura()`** (menu 🧱, **somente leitura**): lê a estrutura real
+  da planilha, acha a linha de cabeçalho mesmo fora da linha 1 e relata, na aba
+  `🧱 Auditoria Estrutura`, o que existe, o que falta e o que será criado.
+- **`criarAbasNovas()`** (menu 🧱): cria **apenas** as abas novas inexistentes
+  (com cabeçalho/cor/congelamento) e semeia a aba `Configurações` com os valores
+  atuais do código. **Nunca** cria nem altera as abas já em uso.
+
+### Decisões de segurança da FASE 1
+- As abas já em uso (**Clientes, Processos, Agenda, Financeiro**) são tratadas
+  **somente na auditoria** — não são modificadas automaticamente, para não
+  conflitar com as colunas/índices que a automação atual já lê e escreve.
+- `CRM/Oportunidades` sobrepõe a aba existente `Prospectos`. Mantida separada;
+  a consolidação deve ser decidida manualmente (ver auditoria).
+
+### FASE 1 — deferido (próximo passo, exige planilha real para validar)
+- **Migrar colunas das abas existentes** para o SCHEMA: como o código lê várias
+  colunas por índice fixo (`r[12]`, `r[19]`…), adicionar/renomear colunas exige
+  rodar a auditoria primeiro e migrar leitura→nome com a planilha à mão.
+- **Ligar o fluxo de dados às novas abas**: gravar andamentos (com hash de
+  deduplicação) em `Andamentos`; registrar chamadas de IA em `IA_Log`; erros em
+  `Erros`; trilha em `Auditoria`; ler parâmetros de `Configurações`. Hoje as
+  abas existem e estão prontas, mas a automação ainda não escreve nelas.
+
 ## 🔜 Estrutural — próxima fase (a aprovar)
 
 - **R4 — IA em lote sem estourar 6 min**: `analisarTodosProcessos` deve

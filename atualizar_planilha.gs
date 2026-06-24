@@ -135,6 +135,112 @@ const ESCRITORIO = {
 
 
 // ============================================================
+// FASE 1 — MODELO DE DADOS (SCHEMA)
+// Fonte única da verdade para abas e colunas.
+//   aliases  : palavras-chave p/ o resolvedor central encontrar a aba
+//              (tolerante a emoji/acento/maiúsculas/espaços)
+//   headers  : colunas PROPOSTAS (cabeçalho)
+//   existente: true  = aba já em uso pela automação → auditoria apenas,
+//                      NUNCA é criada/alterada automaticamente
+//              false = aba nova → pode ser criada com segurança
+//   cor      : cor da guia (apenas em abas novas)
+// ============================================================
+const SCHEMA = {
+  CONFIGURACOES: {
+    nome: 'Configurações', existente: false, cor: '#455a64',
+    aliases: ['Configurações', 'Config', 'Configuracoes', 'Parâmetros'],
+    headers: ['Chave', 'Valor', 'Descrição', 'Categoria']
+  },
+  CLIENTES: {
+    nome: 'Clientes', existente: true,
+    aliases: ['Clientes', 'Cliente'],
+    headers: ['ID interno', 'Nome', 'CPF/CNPJ', 'E-mail', 'Telefone',
+      'Data de nascimento', 'Tipo de cliente', 'Origem do cliente',
+      'Status do relacionamento', 'Pasta no Drive', 'Documentos pendentes',
+      'Contrato assinado', 'Procuração assinada', 'Observações relevantes',
+      'Data de cadastro', 'Data da última interação']
+  },
+  PROCESSOS: {
+    nome: 'Processos', existente: true,
+    aliases: ['Processos', 'Processo'],
+    headers: ['ID interno', 'Número CNJ', 'Cliente', 'Parte contrária',
+      'Tribunal', 'Sistema processual', 'Órgão julgador', 'Classe', 'Assunto',
+      'Área', 'Fase', 'Status', 'Responsável', 'Link do processo',
+      'Pasta do processo no Drive', 'Último andamento', 'Data do último andamento',
+      'Dias sem movimentação', 'Próximo prazo', 'Grau de risco',
+      'Estratégia processual resumida', 'Observações']
+  },
+  AGENDA: {
+    nome: 'Agenda', existente: true,
+    aliases: ['Agenda', 'Prazos', 'Agenda/Prazos'],
+    headers: ['ID interno', 'Processo vinculado', 'Cliente', 'Tipo de prazo',
+      'Descrição', 'Data fatal', 'Horário', 'Responsável', 'Status', 'Prioridade',
+      'Origem do prazo', 'E-mail de origem', 'Data de captura',
+      'Confirmado por humano', 'Enviado alerta', 'Observações']
+  },
+  ANDAMENTOS: {
+    nome: 'Andamentos', existente: false, cor: '#1565c0',
+    aliases: ['Andamentos', 'Andamento', 'Movimentações'],
+    headers: ['ID interno', 'Processo vinculado', 'Data do andamento',
+      'Sistema de origem', 'Resumo do andamento', 'Texto bruto', 'Link do e-mail',
+      'Hash de deduplicação', 'Classificação por IA', 'Relevância',
+      'Ação sugerida', 'Criado em']
+  },
+  TAREFAS: {
+    nome: 'Tarefas', existente: false, cor: '#2e7d32',
+    aliases: ['Tarefas', 'Tarefa', 'To-do'],
+    headers: ['ID interno', 'Cliente', 'Processo', 'Descrição', 'Responsável',
+      'Status', 'Prioridade', 'Prazo interno', 'Origem', 'Criado em', 'Concluído em']
+  },
+  DOCUMENTOS: {
+    nome: 'Documentos', existente: false, cor: '#6a1b9a',
+    aliases: ['Documentos', 'Documento', 'Docs'],
+    headers: ['ID interno', 'Cliente', 'Processo', 'Tipo de documento',
+      'Nome do documento', 'Link do Drive', 'Template utilizado', 'Status',
+      'Criado em', 'Revisado por', 'Observações']
+  },
+  FINANCEIRO: {
+    nome: 'Financeiro', existente: true,
+    aliases: ['Financeiro', 'Finanças', 'Honorários'],
+    headers: ['Cliente', 'Processo', 'Tipo de contratação', 'Honorários fixos',
+      'Honorários de êxito', 'Parcelas', 'Vencimentos', 'Valores pagos',
+      'Valores em aberto', 'Custas', 'Reembolsos', 'Status financeiro', 'Observações']
+  },
+  CRM: {
+    nome: 'CRM/Oportunidades', existente: false, cor: '#ad1457',
+    aliases: ['CRM/Oportunidades', 'CRM', 'Oportunidades', 'Prospectos', 'Leads'],
+    headers: ['Lead', 'Origem', 'Data do primeiro contato', 'Área de interesse',
+      'Valor estimado', 'Probabilidade de fechamento', 'Próxima ação', 'Status',
+      'Observações']
+  },
+  IA_LOG: {
+    nome: 'IA_Log', existente: false, cor: '#00838f',
+    aliases: ['IA_Log', 'IA Log', 'Log IA'],
+    headers: ['Data', 'Usuário', 'Função chamada', 'Prompt utilizado',
+      'Modelo utilizado', 'Processo/cliente relacionado', 'Resultado', 'Status',
+      'Erro', 'Custo estimado']
+  },
+  AUDITORIA: {
+    nome: 'Auditoria', existente: false, cor: '#37474f',
+    aliases: ['Auditoria', 'Audit'],
+    headers: ['Timestamp', 'Usuário', 'Função executada', 'Entidade afetada',
+      'Antes', 'Depois', 'Resultado', 'Erro', 'ID de correlação']
+  },
+  ERROS: {
+    nome: 'Erros', existente: false, cor: '#b71c1c',
+    aliases: ['Erros', 'Erro', 'Errors'],
+    headers: ['Timestamp', 'Função', 'Tipo de erro', 'Mensagem', 'Stack trace',
+      'Dados de contexto', 'Resolvido', 'Observações']
+  },
+  BACKUPS: {
+    nome: 'Backups', existente: false, cor: '#5d4037',
+    aliases: ['Backups', 'Backup'],
+    headers: ['Data', 'Tipo', 'Link do backup', 'Status', 'Observações']
+  }
+};
+
+
+// ============================================================
 // MENU PERSONALIZADO (versão única — todas as fases)
 // ============================================================
 
@@ -184,6 +290,12 @@ function onOpen() {
       .addItem('📝 Gerar Rascunho de Petição',          'gerarRascunhoPeticao')
       .addSeparator()
       .addItem('📋 Ver Painel de Insights',             'verPainelInsights'))
+
+    .addSeparator()
+
+    .addSubMenu(ui.createMenu('🧱 Estrutura de Dados')
+      .addItem('🔍 Auditar Estrutura (somente leitura)', 'auditarEstrutura')
+      .addItem('➕ Criar Abas Novas',                    'criarAbasNovas'))
 
     .addSeparator()
 
@@ -2586,19 +2698,176 @@ function getPlanilha_() {
  * Resolve o problema de abas com prefixos emoji (ex: "⚖ Processos").
  */
 function getSheet_(ss, keyword) {
-  const kw = keyword.toLowerCase().trim();
+  const s = resolverAba_(ss, keyword);
+  if (!s) {
+    Logger.log(`Aba "${keyword}" não encontrada. Abas disponíveis: ${ss.getSheets().map(x => '"' + x.getName() + '"').join(', ')}`);
+  }
+  return s;
+}
+
+/**
+ * Camada centralizada de resolução de abas (FASE 1).
+ * Tolerante a emoji, acentos, maiúsculas/minúsculas, espaços e pequenas
+ * variações de nome. Aceita uma palavra-chave ou uma lista de aliases.
+ */
+function resolverAba_(ss, aliases) {
+  const alvos = (Array.isArray(aliases) ? aliases : [aliases]).map(_normNome_).filter(Boolean);
   const sheets = ss.getSheets();
-  // 1. Tenta match exato primeiro
+  // 1) match exato normalizado
   for (const s of sheets) {
-    if (s.getName().trim() === keyword) return s;
+    if (alvos.indexOf(_normNome_(s.getName())) >= 0) return s;
   }
-  // 2. Match parcial (ignora emoji e espaços extras)
+  // 2) a aba contém o alias (>=3 chars), ou o alias contém o nome
+  //    da aba (>=3 chars). O mínimo evita falso-positivo com abas de
+  //    nome muito curto (ex.: uma aba "A" casar com "agenda").
   for (const s of sheets) {
-    if (s.getName().toLowerCase().includes(kw)) return s;
+    const n = _normNome_(s.getName());
+    if (!n) continue;
+    const ok = alvos.some(a =>
+      (a.length >= 3 && n.indexOf(a) >= 0) ||
+      (n.length >= 3 && a.indexOf(n) >= 0));
+    if (ok) return s;
   }
-  // 3. Loga abas disponíveis para diagnóstico
-  Logger.log(`Aba "${keyword}" não encontrada. Abas disponíveis: ${sheets.map(s => '"' + s.getName() + '"').join(', ')}`);
   return null;
+}
+
+/** Normaliza um nome de aba: remove acento, emoji, símbolos e caixa. */
+function _normNome_(s) {
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // tira acentos
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');                        // tira emoji/espaço/símbolo
+}
+
+// ──────────────────────────────────────────────────────────
+// FASE 1 — AUDITORIA E CRIAÇÃO DE ABAS (não destrutivo)
+// ──────────────────────────────────────────────────────────
+
+/**
+ * Lê a estrutura REAL da planilha e compara com o SCHEMA proposto.
+ * Não altera nada — apenas relata o que existe, o que falta e o que
+ * será criado. Grava o relatório na aba "🧱 Auditoria Estrutura".
+ */
+function auditarEstrutura() {
+  const ss = getPlanilha_();
+  const linhas = [['Aba (SCHEMA)', 'Situação', 'Aba real', 'Colunas propostas faltantes']];
+
+  Object.keys(SCHEMA).forEach(function(k) {
+    const def = SCHEMA[k];
+    const aba = resolverAba_(ss, def.aliases);
+    if (!aba) {
+      linhas.push([def.nome,
+        def.existente ? '❌ AUSENTE (esperada — verifique!)' : '➕ ausente (será criada)',
+        '—', def.headers.join(', ')]);
+      return;
+    }
+    const reais = _lerCabecalhoReal_(aba, def.headers);
+    const faltantes = def.headers.filter(function(h) {
+      return !reais.some(function(hr) { return _normNome_(hr) === _normNome_(h); });
+    });
+    linhas.push([def.nome,
+      faltantes.length ? '⚠️ ' + faltantes.length + ' coluna(s) a propor' : '✅ completa',
+      aba.getName() + ' (' + reais.length + ' col.)',
+      faltantes.join(', ') || '—']);
+  });
+
+  const rel = _abaRelatorio_(ss, '🧱 Auditoria Estrutura');
+  rel.clearContents();
+  rel.getRange(1, 1, linhas.length, 4).setValues(linhas);
+  rel.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground('#37474f').setFontColor('#fff');
+  rel.setFrozenRows(1);
+  rel.autoResizeColumns(1, 4);
+  ss.setActiveSheet(rel);
+  registrarLog('Auditoria de estrutura executada (' + (linhas.length - 1) + ' abas avaliadas).');
+}
+
+/**
+ * Cria SOMENTE as abas novas do SCHEMA que ainda não existem.
+ * Nunca cria nem altera as abas "existente:true" (Clientes, Processos,
+ * Agenda, Financeiro) — essas são tratadas só na auditoria, para não
+ * conflitar com as colunas que a automação já usa.
+ */
+function criarAbasNovas() {
+  const ss = getPlanilha_();
+  const criadas = [], puladas = [];
+
+  Object.keys(SCHEMA).forEach(function(k) {
+    const def = SCHEMA[k];
+    const aba = resolverAba_(ss, def.aliases);
+    if (aba) { puladas.push(def.nome + ' (já existe: "' + aba.getName() + '")'); return; }
+    if (def.existente) { puladas.push(def.nome + ' (esperada e AUSENTE — não criada por segurança)'); return; }
+    _criarAbaComCabecalho_(ss, def);
+    if (k === 'CONFIGURACOES') _semearConfiguracoes_(ss);
+    criadas.push(def.nome);
+  });
+
+  registrarLog('criarAbasNovas: ' + criadas.length + ' criada(s) — ' + criadas.join(', '));
+  try {
+    SpreadsheetApp.getUi().alert('🧱 Estrutura de Dados',
+      'Abas criadas (' + criadas.length + '):\n' + (criadas.join('\n') || '— nenhuma —') +
+      '\n\nNão alteradas (' + puladas.length + '):\n' + puladas.join('\n') +
+      '\n\nAs abas já em uso (Clientes, Processos, Agenda, Financeiro) NÃO são\n' +
+      'modificadas automaticamente. Rode "Auditar Estrutura" para ver as\n' +
+      'colunas sugeridas e decidir com calma.',
+      SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {}
+}
+
+/** Tenta achar a linha de cabeçalho real (nem sempre é a linha 1). */
+function _lerCabecalhoReal_(aba, headersEsperados) {
+  const maxLin = Math.min(aba.getLastRow(), 12);
+  const maxCol = aba.getLastColumn();
+  if (maxLin < 1 || maxCol < 1) return [];
+  const bloco = aba.getRange(1, 1, maxLin, maxCol).getValues();
+  const alvo = headersEsperados.map(_normNome_);
+  let melhor = [], melhorScore = -1;
+  for (let r = 0; r < bloco.length; r++) {
+    const linha = bloco[r].map(String);
+    const score = linha.reduce(function(acc, c) {
+      return acc + (alvo.indexOf(_normNome_(c)) >= 0 ? 1 : 0);
+    }, 0);
+    if (score > melhorScore) { melhorScore = score; melhor = linha; }
+  }
+  return melhor.filter(function(c) { return String(c).trim() !== ''; });
+}
+
+function _criarAbaComCabecalho_(ss, def) {
+  const aba = ss.insertSheet(def.nome);
+  aba.getRange(1, 1, 1, def.headers.length)
+     .setValues([def.headers])
+     .setFontWeight('bold')
+     .setBackground(def.cor || '#37474f')
+     .setFontColor('#ffffff');
+  aba.setFrozenRows(1);
+  if (def.cor) aba.setTabColor(def.cor);
+  return aba;
+}
+
+function _abaRelatorio_(ss, nome) {
+  return resolverAba_(ss, nome) || ss.insertSheet(nome);
+}
+
+/** Popula a aba Configurações com os valores atuais do código (documentação viva). */
+function _semearConfiguracoes_(ss) {
+  const aba = resolverAba_(ss, SCHEMA.CONFIGURACOES.aliases);
+  if (!aba || aba.getLastRow() > 1) return;
+  const rows = [
+    ['spreadsheetId',     CONFIG.spreadsheetId,     'ID da planilha Dashboard',            'Geral'],
+    ['labelProcessado',   CONFIG.labelProcessado,   'Etiqueta Gmail — e-mail processado',  'Gmail'],
+    ['labelRevisar',      CONFIG.labelRevisar,      'Etiqueta Gmail — revisar manualmente','Gmail'],
+    ['diasRetroativos',   CONFIG.diasRetroativos,   'Janela de busca de e-mails (dias)',   'Andamento'],
+    ['PASTA_CLIENTES_ID', CFG.PASTA_CLIENTES_ID,    'Pasta raiz dos clientes no Drive',    'Drive'],
+    ['EMAIL_LUIZ',        CFG.EMAIL_LUIZ,           'E-mail interno — Luiz',               'Alertas'],
+    ['EMAIL_KARINY',      CFG.EMAIL_KARINY,         'E-mail interno — Kariny',             'Alertas'],
+    ['DIAS_ALERTA',       CFG.DIAS_ALERTA,          'Antecedência de alerta de prazo',     'Prazos'],
+    ['MAX_BACKUPS',       CFG.MAX_BACKUPS,          'Backups semanais mantidos',           'Backup'],
+    ['TEMPLATE_PROCURACAO', TEMPLATES.PROCURACAO,   'ID do template de Procuração',        'Documentos'],
+    ['TEMPLATE_CONTRATO',   TEMPLATES.CONTRATO,     'ID do template de Contrato',          'Documentos'],
+    ['IA_MODELO',         F4.MODELO,                'Modelo de IA padrão',                 'IA'],
+    ['IA_MODELO_PRO',     F4.MODELO_PRO,            'Modelo de IA para petições',          'IA']
+  ];
+  aba.getRange(2, 1, rows.length, 4).setValues(rows);
+  aba.autoResizeColumns(1, 4);
 }
 
 function buildGmailQuery_() {
