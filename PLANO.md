@@ -162,6 +162,76 @@ const TEMPLATES = {
 - Aba Documentos e Auditoria: escritas via `appendRow` — nenhuma linha existente é alterada.
 - Abas existentes (Clientes, Processos, Agenda, Financeiro) não são modificadas.
 
+## ✅ FASE 5 — IA Jurídica e Produtividade
+
+Integração com a API Claude (Anthropic) para rotinas de escritório.
+Respeita limites profissionais: nunca inventa fatos, nunca cita jurisprudência não fornecida,
+nunca envia mensagens automaticamente (tudo como rascunho).
+
+### Funções implementadas
+
+| Função GAS | Menu | Modelo |
+|---|---|---|
+| `analisarClienteSelecionado` | IA → Analisar Cliente | Haiku |
+| `analisarProcessoSelecionado` | IA → Analisar Processo | Haiku |
+| `analisarTodosProcessos` | IA → Analisar Todos (lote) | Haiku |
+| `gerarRascunhoPeticao` | IA → Gerar Rascunho de Petição | Sonnet |
+| `gerarRelatorioExecutivoIA` | IA → Relatório Executivo Semanal | Sonnet |
+| `triagemInteligente` | IA → Triagem Inteligente | Haiku |
+| `criarTarefasDeEmailsRelevantes` | IA → Automação → Criar Tarefas | Haiku |
+| `gerarChecklistPorTipoCaso` | IA → Automação → Checklist | Haiku |
+| `sugerirRespostaAoCliente` | IA → Automação → Resposta ao Cliente | Haiku |
+| `sugerirCobrancaDocumentos` | IA → Automação → Cobrar Documentos | Haiku |
+| `sugerirPautaSemanal` | IA → Automação → Pauta Semanal | Sonnet |
+
+### Helpers internos FASE 5
+
+| Função | Propósito |
+|---|---|
+| `_f5_logarIA_` | Registra cada chamada IA na aba `IA_Log` com custo estimado |
+| `_f5_colVal_` | Busca valor em coluna por lista de aliases (robusto a variações de header) |
+| `_f5_docsCliente_` | Lista docs entregues + identifica pendentes para um cliente |
+| `_f5_prazosProcesso_` | Prazos da Agenda para um processo específico |
+| `_f5_andamentosProcesso_` | Últimos 5 andamentos de um processo |
+| `_f5_coletarDadosSemanal_` | Agrega dados de Clientes/Processos/Agenda/Financeiro para relatório |
+| `_f5_coletarDadosTriagem_` | Agrega dados para triagem (e-mails, sem responsável, prazos urgentes) |
+| `_f5_criarDocRelatorio_` | Cria Google Doc com relatório semanal na pasta do escritório |
+| `_f5_salvarInsightProcesso_` | Salva análise de processo na aba `🤖 IA Insights` |
+| `_f5_mostrarInsightProcesso_` | Exibe análise de processo em alerta formatado |
+| `_f5_mostrarTriagem_` | Exibe resultado de triagem em alerta formatado |
+
+### IA_Log — schema da aba
+
+| Col | Campo |
+|---|---|
+| A | Data |
+| B | Usuário |
+| C | Função chamada |
+| D | Prompt utilizado (primeiros 500 chars) |
+| E | Modelo utilizado |
+| F | Processo/cliente relacionado |
+| G | Resultado (primeiros 1000 chars) |
+| H | Status |
+| I | Erro |
+| J | Custo estimado (USD) |
+
+### Regras de ouro (preservadas em todos os prompts)
+
+1. **Nunca invente fatos** não mencionados nos dados fornecidos
+2. **Nunca cite jurisprudência** não presente nos andamentos/dados
+3. **Use `[DADO NECESSÁRIO: xxx]`** onde faltar informação para rascunhos
+4. **Nunca envie e-mail automaticamente** — toda comunicação via `GmailApp.createDraft()`
+5. **Alertas de revisão** em todo output de IA antes de uso externo
+6. **Falha de logging não bloqueia** a funcionalidade principal (`_f5_logarIA_` em try/catch)
+
+### Decisões de design FASE 5
+
+- `analisarTodosProcessos`: já existia na FASE 4; FASE 5 não o duplica
+- Custo estimado no IA_Log: aproximação (1 token ≈ 4 chars; preços Haiku publicados)
+- `triagemInteligente`: coleta e-mails da label `PJe-Triagem` + dados locais das abas
+- `sugerirPautaSemanal` e `gerarRelatorioExecutivoIA`: usam Sonnet (modelo Pro) por exigirem síntese mais elaborada
+- Abas existentes (Clientes, Processos, Agenda, Financeiro) **não são modificadas** pela FASE 5
+
 ## 🔜 Estrutural — próxima fase (a aprovar)
 
 - **R4 — IA em lote sem estourar 6 min**: `analisarTodosProcessos` deve

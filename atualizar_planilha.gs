@@ -324,14 +324,25 @@ function onOpen() {
     .addSeparator()
 
     .addSubMenu(ui.createMenu('🤖 IA — Claude')
-      .addItem('🔑 Configurar Chave API',               'configurarApiClaude')
+      .addItem('🔑 Configurar Chave API',                   'configurarApiClaude')
       .addSeparator()
-      .addItem('📊 Analisar Cliente Selecionado',       'analisarClienteSelecionado')
-      .addItem('⚡ Analisar Todos os Processos (lote)', 'analisarTodosProcessos')
+      .addItem('📊 Analisar Cliente Selecionado',           'analisarClienteSelecionado')
+      .addItem('⚖️ Analisar Processo Selecionado',          'analisarProcessoSelecionado')
+      .addItem('⚡ Analisar Todos os Clientes (lote)',       'analisarTodosProcessos')
       .addSeparator()
-      .addItem('📝 Gerar Rascunho de Petição',          'gerarRascunhoPeticao')
+      .addItem('📝 Gerar Rascunho de Petição',              'gerarRascunhoPeticao')
       .addSeparator()
-      .addItem('📋 Ver Painel de Insights',             'verPainelInsights'))
+      .addItem('📰 Relatório Executivo Semanal (IA)',       'gerarRelatorioExecutivoIA')
+      .addItem('🔍 Triagem Inteligente',                    'triagemInteligente')
+      .addSeparator()
+      .addSubMenu(ui.createMenu('🤖 Automação Assistida')
+        .addItem('📌 Criar Tarefas de E-mails Relevantes',  'criarTarefasDeEmailsRelevantes')
+        .addItem('✅ Gerar Checklist por Tipo de Caso',      'gerarChecklistPorTipoCaso')
+        .addItem('💬 Sugerir Resposta ao Cliente',           'sugerirRespostaAoCliente')
+        .addItem('📂 Sugerir Cobrança de Documentos',        'sugerirCobrancaDocumentos')
+        .addItem('📅 Sugerir Pauta Semanal de Trabalho',     'sugerirPautaSemanal'))
+      .addSeparator()
+      .addItem('📋 Ver Painel de Insights',                 'verPainelInsights'))
 
     .addSeparator()
 
@@ -2445,29 +2456,37 @@ function analisarClienteSelecionado() {
 
   const andamentos     = _f4_coletarAndamentos(dados.nome, 3);
   const processosTexto = _f4_buscarProcessos(dados.id);
+  const docsCliente    = _f5_docsCliente_(ss, dados.id, dados.nome);
 
   const prompt =
     'Analise os dados deste cliente de um escritório de advocacia brasileiro e retorne um JSON.\n\n' +
     'DADOS DO CLIENTE:\n' +
     '- Nome: ' + dados.nome + '\n' +
-    '- Área: ' + dados.area + '\n' +
+    '- CPF: ' + (dados.cpf || 'não informado') + '\n' +
+    '- Área: ' + (dados.area || 'não informada') + '\n' +
     '- Honorários: ' + dados.tipoHon + ' — R$ ' + dados.valor + '\n' +
-    '- Responsável: ' + dados.responsavel + '\n\n' +
-    'PROCESSOS:\n' + (processosTexto || 'Nenhum processo cadastrado') + '\n\n' +
+    '- Responsável: ' + (dados.responsavel || 'não definido') + '\n\n' +
+    'PROCESSOS VINCULADOS:\n' + (processosTexto || 'Nenhum processo cadastrado') + '\n\n' +
+    'DOCUMENTOS GERADOS NO SISTEMA:\n' + docsCliente + '\n\n' +
     'ANDAMENTOS RECENTES (Drive):\n' + (andamentos.textos.join('\n') || 'Nenhum documento na pasta de andamentos') + '\n\n' +
+    'INSTRUÇÕES: Analise apenas os dados fornecidos. Não invente fatos. Não cite jurisprudência não mencionada.\n\n' +
     'Retorne APENAS o JSON abaixo, sem markdown:\n' +
     '{\n' +
     '  "resumo": "2-3 frases sobre a situação atual",\n' +
-    '  "urgencias": ["item urgente 1", "item urgente 2"],\n' +
+    '  "urgencias": ["item urgente 1"],\n' +
     '  "proximos_passos": ["ação 1", "ação 2", "ação 3"],\n' +
     '  "riscos": ["risco 1"],\n' +
     '  "oportunidades": "texto sobre oportunidades",\n' +
     '  "score_saude": 7,\n' +
-    '  "justificativa_score": "explicação do score"\n' +
+    '  "justificativa_score": "explicação do score",\n' +
+    '  "docs_pendentes": ["documento faltante ou a regularizar"],\n' +
+    '  "checklist": ["tarefa operacional 1", "tarefa operacional 2"]\n' +
     '}';
 
   const resposta = _f4_chamarClaude(prompt, false);
   if (!resposta) return;
+
+  _f5_logarIA_('analisarClienteSelecionado', prompt, F4.MODELO, resposta, dados.nome);
 
   try {
     const json = JSON.parse(resposta.replace(/```json\n?|\n?```/g, '').trim());
@@ -2578,8 +2597,8 @@ function gerarRascunhoPeticao() {
   ss.toast('Redigindo ' + tipoPeticao + '...', '🤖 IA redigindo petição', 90);
 
   const prompt =
-    'Você é um advogado brasileiro especialista em ' + dados.area + '.\n' +
-    'Redija um rascunho profissional e completo de:\n\n' +
+    'Você é um assistente jurídico de um escritório de advocacia brasileiro especializado em ' + dados.area + '.\n' +
+    'Redija um RASCUNHO INICIAL de:\n\n' +
     tipoPeticao.toUpperCase() + '\n\n' +
     'DADOS DO CLIENTE:\n' +
     'Nome: ' + dados.nome + ' | CPF: ' + dados.cpf + '\n' +
@@ -2587,20 +2606,23 @@ function gerarRascunhoPeticao() {
     'Área: ' + dados.area + '\n' +
     'Processos: ' + (processos || 'a qualificar') + '\n\n' +
     'ANDAMENTOS RECENTES:\n' + (andamentos.textos.join('\n') || 'Não disponíveis') + '\n\n' +
-    'CONTEXTO E INSTRUÇÕES ADICIONAIS:\n' + (contextoExtra || 'Nenhum') + '\n\n' +
-    'REGRAS DE FORMATAÇÃO:\n' +
-    '- Use linguagem jurídica formal brasileira\n' +
-    '- Estrutura: Excelentíssimo(a) Senhor(a) [cargo], qualificação das partes, DOS FATOS, DO DIREITO, DOS PEDIDOS, fechamento com local/data\n' +
-    '- Deixe [PREENCHER] onde faltar dado específico do processo (nº, vara, comarca)\n' +
-    '- Cite artigos de lei, doutrina e jurisprudência pertinentes\n' +
-    '- Advogado: ' + dados.responsavel + ' (a OAB será preenchida manualmente)\n' +
-    '- Entre 800 e 2000 palavras\n' +
-    '- NÃO use markdown, escreva em texto puro';
+    'CONTEXTO E INSTRUÇÕES:\n' + (contextoExtra || 'Nenhum') + '\n\n' +
+    'REGRAS OBRIGATÓRIAS:\n' +
+    '1. Use linguagem jurídica formal brasileira\n' +
+    '2. Estrutura: endereçamento, qualificação das partes, DOS FATOS, DO DIREITO, DOS PEDIDOS, local/data\n' +
+    '3. Use [DADO NECESSÁRIO: descrição do que falta] onde faltar informação (nº processo, vara, comarca, datas, valores)\n' +
+    '4. NUNCA invente fatos não mencionados nos dados fornecidos\n' +
+    '5. NUNCA cite jurisprudência específica (acórdão, REsp, AI, número de processo) sem que conste nos andamentos fornecidos — use formulações genéricas ("conforme jurisprudência consolidada...") apenas quando o tema jurídico for incontestável\n' +
+    '6. Pode citar artigos de lei expressos na legislação brasileira (CLT, CC, CPC, CF, etc.) quando aplicáveis ao tipo da ação\n' +
+    '7. NÃO use markdown — texto puro apenas\n' +
+    '8. Entre 600 e 1800 palavras\n' +
+    '9. Advogado subscritor: ' + dados.responsavel + ' (OAB a preencher manualmente)';
 
   const rascunho = _f4_chamarClaude(prompt, true);
   if (!rascunho) return;
 
   _f4_salvarRascunhoDoc(dados, tipoPeticao, rascunho);
+  _f5_logarIA_('gerarRascunhoPeticao', prompt, F4.MODELO_PRO, rascunho, dados.nome + ' | ' + tipoPeticao);
 }
 
 function _f4_salvarRascunhoDoc(dados, tipoPeticao, conteudo) {
@@ -4099,5 +4121,1037 @@ function enviarDocumentoComoRascunho() {
     ui.alert('❌ Erro ao criar rascunho',
       err.message + '\n\nVerifique o Log para detalhes.',
       ui.ButtonSet.OK);
+  }
+}
+
+// ============================================================
+// FASE 5 — IA JURÍDICA E PRODUTIVIDADE
+// ============================================================
+
+// ---- Auxiliares internos FASE 5 ----
+
+function _f5_logarIA_(funcao, prompt, modelo, resposta, clienteRef) {
+  try {
+    const ss  = SpreadsheetApp.getActiveSpreadsheet();
+    const aba = resolverAba_(ss, ['IA_Log', 'IA Log', 'IALog', 'Log IA']);
+    if (!aba) return;
+
+    const inputChars  = prompt.length;
+    const outputChars = String(resposta).length;
+    // Estimativa aproximada: 1 token ≈ 4 chars; preço Haiku ~$0.25/M input, $1.25/M output
+    const custoEstimado = ((inputChars / 4) * 0.00000025 + (outputChars / 4) * 0.00000125).toFixed(6);
+
+    aba.appendRow([
+      new Date(),
+      Session.getActiveUser().getEmail() || 'sistema',
+      funcao,
+      prompt.substring(0, 500) + (prompt.length > 500 ? '…' : ''),
+      modelo,
+      clienteRef || '',
+      String(resposta).substring(0, 1000) + (String(resposta).length > 1000 ? '…' : ''),
+      'OK',
+      '',
+      'USD ' + custoEstimado
+    ]);
+  } catch (e) {
+    registrarLog('AVISO _f5_logarIA_: ' + e.message);
+  }
+}
+
+function _f5_colVal_(h, rowData, names) {
+  // Retorna valor da primeira coluna encontrada em `names` (array de alias)
+  for (const n of names) {
+    const i = h.indexOf(n);
+    if (i >= 0 && i < rowData.length) {
+      const v = rowData[i];
+      if (v !== '' && v !== null && v !== undefined) return v;
+    }
+  }
+  return '';
+}
+
+function _f5_docsCliente_(ss, idCliente, nomeCliente) {
+  // Retorna { lista: [{nome, tipo, data}], pendentes: string[] }
+  const resultado = { lista: [], pendentes: [] };
+  try {
+    const aba = resolverAba_(ss, ['Documentos', 'Docs', 'Documentação']);
+    if (!aba) return resultado;
+
+    const dados  = aba.getDataRange().getValues();
+    if (dados.length < 2) return resultado;
+    const h = dados[0].map(c => String(c).trim());
+
+    const iId   = h.indexOf('ID Cliente');
+    const iNome = h.indexOf('Nome Cliente');
+    const iTipo = h.indexOf('Tipo Documento');
+    const iData = h.indexOf('Data');
+    const iLink = h.indexOf('Link');
+
+    for (let r = 1; r < dados.length; r++) {
+      const row  = dados[r];
+      const idC  = iId   >= 0 ? String(row[iId]).trim()   : '';
+      const nomC = iNome >= 0 ? String(row[iNome]).trim()  : '';
+      if (!idC && !nomC) continue;
+      if ((idCliente && idC === String(idCliente)) ||
+          (nomeCliente && nomC.toLowerCase() === nomeCliente.toLowerCase())) {
+        resultado.lista.push({
+          nome: iTipo >= 0 ? String(row[iTipo]) : '(desconhecido)',
+          data: iData >= 0 ? String(row[iData]) : '',
+          link: iLink >= 0 ? String(row[iLink]) : ''
+        });
+      }
+    }
+
+    // Docs tipicamente esperados para qualquer cliente
+    const ESPERADOS = ['Procuração', 'Contrato', 'RG', 'CPF'];
+    const tiposPresentes = resultado.lista.map(d => d.nome.toLowerCase());
+    for (const esp of ESPERADOS) {
+      if (!tiposPresentes.some(t => t.includes(esp.toLowerCase()))) {
+        resultado.pendentes.push(esp);
+      }
+    }
+  } catch (e) {
+    registrarLog('AVISO _f5_docsCliente_: ' + e.message);
+  }
+  return resultado;
+}
+
+function _f5_prazosProcesso_(ss, nrProcesso) {
+  // Retorna array de {data, descricao, status} da aba Agenda para o processo
+  const prazos = [];
+  try {
+    const aba = resolverAba_(ss, ['Agenda', 'Prazos', 'Agenda e Prazos']);
+    if (!aba) return prazos;
+
+    const dados = aba.getDataRange().getValues();
+    if (dados.length < 2) return prazos;
+    const h = dados[0].map(c => String(c).trim());
+
+    const iProc  = h.findIndex(c => /processo|ref/i.test(c));
+    const iData  = h.indexOf('Data');
+    const iDesc  = h.findIndex(c => /descri|tarefa|compromisso/i.test(c));
+    const iStat  = h.findIndex(c => /status/i.test(c));
+
+    for (let r = 1; r < dados.length; r++) {
+      const row = dados[r];
+      const proc = iProc >= 0 ? String(row[iProc]).trim() : '';
+      if (!proc || !proc.includes(String(nrProcesso).replace(/\D/g, '').substring(0, 7))) continue;
+      prazos.push({
+        data:      iData >= 0 ? String(row[iData]) : '',
+        descricao: iDesc >= 0 ? String(row[iDesc]) : '',
+        status:    iStat >= 0 ? String(row[iStat]) : ''
+      });
+    }
+  } catch (e) {
+    registrarLog('AVISO _f5_prazosProcesso_: ' + e.message);
+  }
+  return prazos;
+}
+
+function _f5_andamentosProcesso_(ss, nrProcesso) {
+  // Retorna últimos 5 andamentos da aba Andamentos para o processo
+  const ands = [];
+  try {
+    const aba = resolverAba_(ss, ['Andamentos', 'Movimentações', 'Histórico']);
+    if (!aba) return ands;
+
+    const dados = aba.getDataRange().getValues();
+    if (dados.length < 2) return ands;
+    const h = dados[0].map(c => String(c).trim());
+
+    const iProc = h.findIndex(c => /processo/i.test(c));
+    const iData = h.findIndex(c => /data/i.test(c));
+    const iDesc = h.findIndex(c => /descri|movimenta|andamento/i.test(c));
+
+    const nr = String(nrProcesso).replace(/\D/g, '').substring(0, 7);
+    for (let r = 1; r < dados.length; r++) {
+      const row  = dados[r];
+      const proc = iProc >= 0 ? String(row[iProc]).replace(/\D/g, '') : '';
+      if (!proc.includes(nr)) continue;
+      ands.push({
+        data:      iData >= 0 ? String(row[iData]) : '',
+        descricao: iDesc >= 0 ? String(row[iDesc]) : ''
+      });
+    }
+  } catch (e) {
+    registrarLog('AVISO _f5_andamentosProcesso_: ' + e.message);
+  }
+  return ands.slice(-5);
+}
+
+// ---- Análise de Processo ----
+
+function analisarProcessoSelecionado() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
+  if (!apiKey) {
+    ui.alert('⚠️ API não configurada', 'Configure a chave API em IA → Configurar Chave API.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const aba = resolverAba_(ss, ['Processos', 'Processos Judiciais', 'Casos']);
+  if (!aba) { ui.alert('❌ Aba Processos não encontrada.'); return; }
+
+  const linha = aba.getActiveCell().getRow();
+  if (linha < 2) { ui.alert('⚠️ Selecione uma linha de processo.'); return; }
+
+  const dados = aba.getDataRange().getValues();
+  const h     = dados[0].map(c => String(c).trim());
+  const row   = dados[linha - 1];
+
+  const nrProcesso = _f5_colVal_(h, row, ['Nº Processo', 'Número Processo', 'Processo']);
+  const cliente    = _f5_colVal_(h, row, ['Cliente', 'Nome Cliente']);
+  const tribunal   = _f5_colVal_(h, row, ['Tribunal / Órgão', 'Tribunal', 'Órgão']);
+  const responsavel= _f5_colVal_(h, row, ['Responsável', 'Advogado']);
+  const status     = _f5_colVal_(h, row, ['Status']);
+  const fase       = _f5_colVal_(h, row, ['Fase', 'Fase Processual']);
+  const ultMov     = _f5_colVal_(h, row, ['Últ. Mov.', 'Última Movimentação', 'Data Mov.']);
+  const descMov    = _f5_colVal_(h, row, ['Desc. Últ. Movimentação', 'Descrição Movimentação', 'Movimentação']);
+  const area       = _f5_colVal_(h, row, ['Área', 'Área Direito']);
+  const tipoAcao   = _f5_colVal_(h, row, ['Tipo de Ação', 'Tipo Ação']);
+  const dataLimite = _f5_colVal_(h, row, ['Data Limite', 'Prazo', 'Vencimento']);
+  const tipoPrazo  = _f5_colVal_(h, row, ['Tipo Prazo', 'Tipo de Prazo']);
+  const obs        = _f5_colVal_(h, row, ['Observações', 'Obs']);
+
+  if (!nrProcesso) { ui.alert('⚠️ Processo sem número na linha selecionada.'); return; }
+
+  const andamentos = _f5_andamentosProcesso_(ss, nrProcesso);
+  const prazos     = _f5_prazosProcesso_(ss, nrProcesso);
+
+  // Calcular inatividade
+  let diasInativos = 0;
+  if (ultMov) {
+    const dtMov = new Date(ultMov);
+    if (!isNaN(dtMov)) diasInativos = Math.floor((new Date() - dtMov) / 86400000);
+  }
+
+  const prompt = `Você é um assistente jurídico de apoio ao escritório Neves Marques Advocacia.
+Analise o processo abaixo e responda EXCLUSIVAMENTE com JSON válido no formato especificado.
+NÃO invente fatos. NÃO cite jurisprudência não mencionada nos dados. NÃO faça suposições além do que consta.
+
+DADOS DO PROCESSO:
+- Número: ${nrProcesso}
+- Cliente: ${cliente}
+- Tribunal/Órgão: ${tribunal}
+- Área: ${area} | Tipo de Ação: ${tipoAcao}
+- Status: ${status} | Fase: ${fase}
+- Responsável: ${responsavel}
+- Última Movimentação: ${ultMov} (${diasInativos} dias atrás)
+- Descrição: ${descMov}
+- Tipo de Prazo: ${tipoPrazo} | Data Limite: ${dataLimite}
+- Observações: ${obs}
+- Últimos Andamentos: ${JSON.stringify(andamentos)}
+- Prazos na Agenda: ${JSON.stringify(prazos)}
+
+Responda com JSON no formato:
+{
+  "resumo": "resumo histórico objetivo em 2-3 frases",
+  "ultimo_andamento": "descrição do último andamento relevante",
+  "inatividade": "avaliação da inatividade (${diasInativos} dias) e se é preocupante",
+  "providencias": ["providência 1", "providência 2"],
+  "risco": "baixo | médio | alto",
+  "risco_descricao": "justificativa do nível de risco",
+  "prazo_pendente": "descrição do prazo pendente ou 'Nenhum identificado'",
+  "prazo_urgente": true ou false,
+  "alerta": "alerta principal ou vazio se não houver"
+}`;
+
+  try {
+    const resposta = _f4_chamarClaude(prompt, false);
+    if (!resposta) return;
+
+    _f5_logarIA_('analisarProcessoSelecionado', prompt, F4.MODELO, resposta, nrProcesso + ' | ' + cliente);
+
+    const json = JSON.parse(resposta.replace(/```json\n?|\n?```/g, '').trim());
+    _f5_salvarInsightProcesso_(ss, nrProcesso, cliente, json);
+    _f5_mostrarInsightProcesso_(nrProcesso, cliente, json);
+  } catch (e) {
+    registrarLog('ERRO analisarProcessoSelecionado: ' + e.message);
+    ui.alert('❌ Erro na análise', e.message, ui.ButtonSet.OK);
+  }
+}
+
+function _f5_salvarInsightProcesso_(ss, nrProcesso, cliente, json) {
+  try {
+    let aba = resolverAba_(ss, [F4.ABA_INSIGHTS]);
+    if (!aba) {
+      aba = ss.insertSheet(F4.ABA_INSIGHTS);
+      aba.appendRow(['Data', 'Tipo', 'Referência', 'Cliente', 'Risco', 'Resumo', 'Providências', 'Prazo Pendente', 'Alerta']);
+    }
+    aba.appendRow([
+      new Date(), 'Processo', nrProcesso, cliente,
+      json.risco || '',
+      json.resumo || '',
+      (json.providencias || []).join(' | '),
+      json.prazo_pendente || '',
+      json.alerta || ''
+    ]);
+  } catch (e) {
+    registrarLog('AVISO _f5_salvarInsightProcesso_: ' + e.message);
+  }
+}
+
+function _f5_mostrarInsightProcesso_(nrProcesso, cliente, json) {
+  const ui    = SpreadsheetApp.getUi();
+  const risco = { baixo: '🟢', medio: '🟡', médio: '🟡', alto: '🔴' };
+  const emoji = risco[(json.risco || '').toLowerCase()] || '⚪';
+
+  const providencias = (json.providencias || []).map((p, i) => `${i + 1}. ${p}`).join('\n');
+  const urgente      = json.prazo_urgente ? ' ⚠️ URGENTE' : '';
+
+  const msg = [
+    `Processo: ${nrProcesso} — ${cliente}`,
+    '─'.repeat(40),
+    `📋 Resumo: ${json.resumo || '—'}`,
+    '',
+    `⏱️ Último andamento: ${json.ultimo_andamento || '—'}`,
+    `📅 Inatividade: ${json.inatividade || '—'}`,
+    '',
+    `${emoji} Risco: ${(json.risco || '—').toUpperCase()}`,
+    `   ${json.risco_descricao || ''}`,
+    '',
+    `⏰ Prazo pendente${urgente}: ${json.prazo_pendente || 'Nenhum identificado'}`,
+    '',
+    `📌 Providências:\n${providencias || '—'}`,
+    json.alerta ? `\n⚠️ ALERTA: ${json.alerta}` : ''
+  ].filter(l => l !== undefined).join('\n');
+
+  ui.alert('⚖️ Análise do Processo', msg, ui.ButtonSet.OK);
+}
+
+// ---- Relatório Executivo Semanal ----
+
+function gerarRelatorioExecutivoIA() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
+  if (!apiKey) {
+    ui.alert('⚠️ API não configurada', 'Configure a chave API em IA → Configurar Chave API.', ui.ButtonSet.OK);
+    return;
+  }
+
+  ui.alert('📰 Relatório Semanal', 'Coletando dados do escritório… Aguarde.', ui.ButtonSet.OK);
+
+  try {
+    const dados   = _f5_coletarDadosSemanal_(ss);
+    const prompt  = `Você é um assistente jurídico de apoio ao escritório Neves Marques Advocacia.
+Gere um relatório executivo semanal objetivo com base nos dados abaixo.
+NÃO invente informações. Use apenas o que consta nos dados fornecidos.
+Responda EXCLUSIVAMENTE com JSON válido no formato especificado.
+
+DADOS DA SEMANA:
+${JSON.stringify(dados, null, 2).substring(0, F4.MAX_CHARS)}
+
+Formato JSON esperado:
+{
+  "periodo": "período de referência",
+  "novos_clientes": ["lista de novos clientes"],
+  "novos_processos": ["lista de novos processos"],
+  "prazos_semana": ["prazo 1", "prazo 2"],
+  "prazos_vencidos": ["prazo vencido 1"],
+  "processos_parados": ["processo parado 1"],
+  "pendencias_financeiras": "resumo de pendências financeiras",
+  "tarefas_criticas": ["tarefa crítica 1"],
+  "sugestoes_priorizacao": ["sugestão 1", "sugestão 2"],
+  "resumo_executivo": "parágrafo de 3-5 frases resumindo a semana"
+}`;
+
+    const resposta = _f4_chamarClaude(prompt, true);
+    if (!resposta) return;
+
+    _f5_logarIA_('gerarRelatorioExecutivoIA', prompt, F4.MODELO_PRO, resposta, 'Escritório');
+
+    const json = JSON.parse(resposta.replace(/```json\n?|\n?```/g, '').trim());
+    _f5_criarDocRelatorio_(ss, json);
+  } catch (e) {
+    registrarLog('ERRO gerarRelatorioExecutivoIA: ' + e.message);
+    ui.alert('❌ Erro ao gerar relatório', e.message, ui.ButtonSet.OK);
+  }
+}
+
+function _f5_coletarDadosSemanal_(ss) {
+  const hoje   = new Date();
+  const semana = new Date(hoje.getTime() - 7 * 86400000);
+  const dados  = { periodo: Utilities.formatDate(semana, 'America/Sao_Paulo', 'dd/MM/yyyy') + ' a ' + Utilities.formatDate(hoje, 'America/Sao_Paulo', 'dd/MM/yyyy') };
+
+  // Clientes novos
+  try {
+    const abaC = resolverAba_(ss, ['Clientes']);
+    if (abaC) {
+      const d = abaC.getDataRange().getValues();
+      const h = d[0].map(c => String(c).trim());
+      const iData = h.findIndex(c => /data|cadastro/i.test(c));
+      const iNome = h.indexOf('Nome');
+      dados.novos_clientes = [];
+      for (let r = 1; r < d.length; r++) {
+        const dt = iData >= 0 ? new Date(d[r][iData]) : null;
+        if (dt && !isNaN(dt) && dt >= semana) {
+          dados.novos_clientes.push(iNome >= 0 ? String(d[r][iNome]) : 'Cliente #' + r);
+        }
+      }
+    }
+  } catch (e) { registrarLog('AVISO coletarSemanal clientes: ' + e.message); }
+
+  // Processos novos e parados
+  try {
+    const abaP = resolverAba_(ss, ['Processos']);
+    if (abaP) {
+      const d = abaP.getDataRange().getValues();
+      const h = d[0].map(c => String(c).trim());
+      const iNr   = h.findIndex(c => /n[ºo°]\s*processo/i.test(c));
+      const iCli  = h.indexOf('Cliente');
+      const iDist = h.findIndex(c => /distribui/i.test(c));
+      const iMov  = h.findIndex(c => /últ.*mov|ultima.*mov/i.test(c));
+      const iStat = h.indexOf('Status');
+      dados.novos_processos    = [];
+      dados.processos_parados  = [];
+      for (let r = 1; r < d.length; r++) {
+        const dtDist = iDist >= 0 ? new Date(d[r][iDist]) : null;
+        if (dtDist && !isNaN(dtDist) && dtDist >= semana) {
+          const nr  = iNr  >= 0 ? String(d[r][iNr])  : '#' + r;
+          const cli = iCli >= 0 ? String(d[r][iCli]) : '';
+          dados.novos_processos.push(nr + (cli ? ' — ' + cli : ''));
+        }
+        const dtMov = iMov >= 0 ? new Date(d[r][iMov]) : null;
+        if (dtMov && !isNaN(dtMov)) {
+          const dias = Math.floor((hoje - dtMov) / 86400000);
+          if (dias >= FASE3.DIAS_INATIVO) {
+            const nr  = iNr   >= 0 ? String(d[r][iNr])   : '#' + r;
+            const cli = iCli  >= 0 ? String(d[r][iCli])  : '';
+            const st  = iStat >= 0 ? String(d[r][iStat]) : '';
+            if (st !== 'Encerrado' && st !== 'Arquivado') {
+              dados.processos_parados.push(nr + (cli ? ' — ' + cli : '') + ' (' + dias + ' dias sem mov.)');
+            }
+          }
+        }
+      }
+    }
+  } catch (e) { registrarLog('AVISO coletarSemanal processos: ' + e.message); }
+
+  // Prazos da semana e vencidos
+  try {
+    const abaA = resolverAba_(ss, ['Agenda']);
+    if (abaA) {
+      const d = abaA.getDataRange().getValues();
+      const h = d[0].map(c => String(c).trim());
+      const iData  = h.indexOf('Data');
+      const iDesc  = h.findIndex(c => /descri|tarefa|compromisso/i.test(c));
+      const iProc  = h.findIndex(c => /processo|ref/i.test(c));
+      const iStat  = h.findIndex(c => /status/i.test(c));
+      dados.prazos_semana  = [];
+      dados.prazos_vencidos = [];
+      const proxSemana = new Date(hoje.getTime() + 7 * 86400000);
+      for (let r = 1; r < d.length; r++) {
+        const dt   = iData >= 0 ? new Date(d[r][iData]) : null;
+        if (!dt || isNaN(dt)) continue;
+        const stat = iStat >= 0 ? String(d[r][iStat]).trim() : '';
+        if (stat === F3.STATUS_REALIZADO || stat === F3.STATUS_CANCELADO) continue;
+        const desc = iDesc >= 0 ? String(d[r][iDesc]) : '';
+        const proc = iProc >= 0 ? String(d[r][iProc]) : '';
+        const texto = Utilities.formatDate(dt, 'America/Sao_Paulo', 'dd/MM/yyyy') + ' — ' + desc + (proc ? ' [' + proc + ']' : '');
+        if (dt < hoje) {
+          dados.prazos_vencidos.push(texto);
+        } else if (dt <= proxSemana) {
+          dados.prazos_semana.push(texto);
+        }
+      }
+    }
+  } catch (e) { registrarLog('AVISO coletarSemanal agenda: ' + e.message); }
+
+  // Pendências financeiras
+  try {
+    const abaF = resolverAba_(ss, ['Financeiro', 'Financeira', 'Honorários']);
+    if (abaF) {
+      const d = abaF.getDataRange().getValues();
+      const h = d[0].map(c => String(c).trim());
+      const iStat = h.findIndex(c => /status|situação/i.test(c));
+      const iVal  = h.findIndex(c => /valor/i.test(c));
+      let totalPendente = 0;
+      let countPend     = 0;
+      for (let r = 1; r < d.length; r++) {
+        const st = iStat >= 0 ? String(d[r][iStat]).toLowerCase() : '';
+        if (st.includes('pend') || st.includes('abert') || st.includes('vencid')) {
+          countPend++;
+          const v = iVal >= 0 ? parseFloat(String(d[r][iVal]).replace(/[R$\s.]/g, '').replace(',', '.')) : 0;
+          if (!isNaN(v)) totalPendente += v;
+        }
+      }
+      dados.pendencias_financeiras = countPend + ' lançamento(s) pendente(s), total aprox. R$ ' + totalPendente.toFixed(2);
+    }
+  } catch (e) { registrarLog('AVISO coletarSemanal financeiro: ' + e.message); }
+
+  return dados;
+}
+
+function _f5_criarDocRelatorio_(ss, json) {
+  const ui  = SpreadsheetApp.getUi();
+  const fmt = d => Utilities.formatDate(new Date(), 'America/Sao_Paulo', d);
+
+  const titulo  = '📰 Relatório Semanal — ' + fmt('dd/MM/yyyy');
+  const conteudo = [
+    titulo,
+    '═'.repeat(50),
+    '',
+    '📅 Período: ' + (json.periodo || fmt('dd/MM/yyyy')),
+    '',
+    '📝 RESUMO EXECUTIVO',
+    json.resumo_executivo || '—',
+    '',
+    '👤 NOVOS CLIENTES (' + (json.novos_clientes || []).length + ')',
+    ...(json.novos_clientes || []).map(c => '  • ' + c),
+    '',
+    '⚖️ NOVOS PROCESSOS (' + (json.novos_processos || []).length + ')',
+    ...(json.novos_processos || []).map(p => '  • ' + p),
+    '',
+    '📅 PRAZOS DESTA SEMANA',
+    ...(json.prazos_semana || []).map(p => '  • ' + p),
+    '',
+    '⚠️ PRAZOS VENCIDOS',
+    ...(json.prazos_vencidos || []).map(p => '  ⚠️ ' + p),
+    '',
+    '😴 PROCESSOS PARADOS',
+    ...(json.processos_parados || []).map(p => '  • ' + p),
+    '',
+    '💰 PENDÊNCIAS FINANCEIRAS',
+    '  ' + (json.pendencias_financeiras || '—'),
+    '',
+    '🚨 TAREFAS CRÍTICAS',
+    ...(json.tarefas_criticas || []).map((t, i) => '  ' + (i + 1) + '. ' + t),
+    '',
+    '💡 SUGESTÕES DE PRIORIZAÇÃO',
+    ...(json.sugestoes_priorizacao || []).map((s, i) => '  ' + (i + 1) + '. ' + s),
+    '',
+    '─'.repeat(50),
+    'Gerado em ' + fmt('dd/MM/yyyy HH:mm') + ' por IA (revisão humana recomendada)'
+  ].join('\n');
+
+  // Salva em Google Doc na pasta do escritório
+  try {
+    const pasta   = DriveApp.getFolderById(CFG.PASTA_CLIENTES_ID);
+    const doc     = DocumentApp.create(titulo);
+    doc.getBody().setText(conteudo);
+    const docFile = DriveApp.getFileById(doc.getId());
+    pasta.addFile(docFile);
+    DriveApp.getRootFolder().removeFile(docFile);
+
+    ui.alert('✅ Relatório gerado!',
+      'Documento criado: ' + titulo + '\n\nLink: ' + doc.getUrl() + '\n\n⚠️ Revisão humana recomendada antes de qualquer uso.',
+      ui.ButtonSet.OK);
+  } catch (e) {
+    // Fallback: mostra na tela
+    registrarLog('AVISO _f5_criarDocRelatorio_: ' + e.message);
+    ui.alert('📰 ' + titulo, conteudo.substring(0, 1500), ui.ButtonSet.OK);
+  }
+}
+
+// ---- Triagem Inteligente ----
+
+function triagemInteligente() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
+  if (!apiKey) {
+    ui.alert('⚠️ API não configurada', 'Configure a chave API em IA → Configurar Chave API.', ui.ButtonSet.OK);
+    return;
+  }
+
+  ui.alert('🔍 Triagem Inteligente', 'Analisando situação do escritório… Aguarde.', ui.ButtonSet.OK);
+
+  try {
+    const dados  = _f5_coletarDadosTriagem_(ss);
+    const prompt = `Você é um assistente jurídico. Faça uma triagem inteligente do escritório com base nos dados abaixo.
+NÃO invente informações. Use apenas o que consta.
+Responda EXCLUSIVAMENTE com JSON válido no formato especificado.
+
+DADOS:
+${JSON.stringify(dados, null, 2).substring(0, F4.MAX_CHARS)}
+
+Formato JSON:
+{
+  "emails_sem_processo": ["e-mail 1", "e-mail 2"],
+  "andamentos_relevantes": ["andamento relevante 1"],
+  "prazos_urgentes": ["prazo urgente 1"],
+  "clientes_sem_documentos": ["cliente sem doc 1"],
+  "processos_sem_pasta": ["processo sem pasta 1"],
+  "casos_sem_responsavel": ["caso sem responsável 1"],
+  "alertas_gerais": ["alerta 1", "alerta 2"],
+  "resumo": "resumo da triagem em 2-3 frases"
+}`;
+
+    const resposta = _f4_chamarClaude(prompt, false);
+    if (!resposta) return;
+
+    _f5_logarIA_('triagemInteligente', prompt, F4.MODELO, resposta, 'Escritório');
+
+    const json = JSON.parse(resposta.replace(/```json\n?|\n?```/g, '').trim());
+    _f5_mostrarTriagem_(json);
+  } catch (e) {
+    registrarLog('ERRO triagemInteligente: ' + e.message);
+    ui.alert('❌ Erro na triagem', e.message, ui.ButtonSet.OK);
+  }
+}
+
+function _f5_coletarDadosTriagem_(ss) {
+  const dados = {};
+
+  // E-mails com label PJe-Triagem (sem processo vinculado)
+  try {
+    const threads = GmailApp.getUserLabelByName(F2.LABEL_TRIAGEM)
+      ? GmailApp.getUserLabelByName(F2.LABEL_TRIAGEM).getThreads(0, 10) : [];
+    dados.emails_triagem = threads.map(t => ({
+      assunto: t.getFirstMessageSubject(),
+      de: t.getMessages()[0].getFrom(),
+      data: Utilities.formatDate(t.getLastMessageDate(), 'America/Sao_Paulo', 'dd/MM/yyyy')
+    }));
+  } catch (e) { dados.emails_triagem = []; }
+
+  // Processos sem responsável
+  try {
+    const abaP = resolverAba_(ss, ['Processos']);
+    if (abaP) {
+      const d = abaP.getDataRange().getValues();
+      const h = d[0].map(c => String(c).trim());
+      const iNr   = h.findIndex(c => /n[ºo°]\s*processo/i.test(c));
+      const iResp = h.indexOf('Responsável');
+      const iStat = h.indexOf('Status');
+      dados.sem_responsavel = [];
+      for (let r = 1; r < d.length; r++) {
+        const st   = iStat >= 0 ? String(d[r][iStat]).trim() : '';
+        if (st === 'Encerrado' || st === 'Arquivado') continue;
+        const resp = iResp >= 0 ? String(d[r][iResp]).trim() : '';
+        if (!resp) {
+          const nr = iNr >= 0 ? String(d[r][iNr]) : 'Linha ' + (r + 1);
+          dados.sem_responsavel.push(nr);
+        }
+      }
+    }
+  } catch (e) { registrarLog('AVISO triagem processos: ' + e.message); }
+
+  // Clientes sem documentação básica
+  try {
+    const abaC = resolverAba_(ss, ['Clientes']);
+    const abaD = resolverAba_(ss, ['Documentos', 'Docs']);
+    if (abaC && abaD) {
+      const dc = abaC.getDataRange().getValues();
+      const hc = dc[0].map(c => String(c).trim());
+      const iId   = hc.indexOf('ID');
+      const iNome = hc.indexOf('Nome');
+
+      const dd = abaD.getDataRange().getValues();
+      const hd = dd[0].map(c => String(c).trim());
+      const iIdD = hd.indexOf('ID Cliente');
+
+      const idsComDocs = new Set(dd.slice(1).map(r => String(iIdD >= 0 ? r[iIdD] : '')).filter(Boolean));
+      dados.clientes_sem_docs = [];
+      for (let r = 1; r < dc.length; r++) {
+        const id   = iId   >= 0 ? String(dc[r][iId]).trim()   : '';
+        const nome = iNome >= 0 ? String(dc[r][iNome]).trim()  : '';
+        if (nome && id && !idsComDocs.has(id)) {
+          dados.clientes_sem_docs.push(nome);
+        }
+      }
+    }
+  } catch (e) { registrarLog('AVISO triagem docs: ' + e.message); }
+
+  // Prazos urgentes (próximos DIAS_URGENTE dias)
+  try {
+    const abaA = resolverAba_(ss, ['Agenda']);
+    if (abaA) {
+      const d = abaA.getDataRange().getValues();
+      const h = d[0].map(c => String(c).trim());
+      const iData = h.indexOf('Data');
+      const iDesc = h.findIndex(c => /descri|tarefa/i.test(c));
+      const iStat = h.findIndex(c => /status/i.test(c));
+      const limite = new Date(new Date().getTime() + F3.DIAS_URGENTE * 86400000);
+      dados.prazos_urgentes = [];
+      for (let r = 1; r < d.length; r++) {
+        const dt   = iData >= 0 ? new Date(d[r][iData]) : null;
+        if (!dt || isNaN(dt)) continue;
+        const stat = iStat >= 0 ? String(d[r][iStat]).trim() : '';
+        if (stat === F3.STATUS_REALIZADO || stat === F3.STATUS_CANCELADO) continue;
+        if (dt >= new Date() && dt <= limite) {
+          dados.prazos_urgentes.push(Utilities.formatDate(dt, 'America/Sao_Paulo', 'dd/MM/yyyy') + ': ' + (iDesc >= 0 ? String(d[r][iDesc]) : ''));
+        }
+      }
+    }
+  } catch (e) { registrarLog('AVISO triagem agenda: ' + e.message); }
+
+  return dados;
+}
+
+function _f5_mostrarTriagem_(json) {
+  const ui = SpreadsheetApp.getUi();
+
+  const sec = (emoji, titulo, lista) => {
+    if (!lista || !lista.length) return '';
+    return '\n' + emoji + ' ' + titulo + ' (' + lista.length + '):\n' + lista.map(i => '  • ' + i).join('\n');
+  };
+
+  const msg = [
+    '📋 Resumo: ' + (json.resumo || '—'),
+    sec('📧', 'E-mails sem processo', json.emails_sem_processo),
+    sec('⚖️', 'Andamentos relevantes', json.andamentos_relevantes),
+    sec('⏰', 'Prazos urgentes', json.prazos_urgentes),
+    sec('📂', 'Clientes sem documentos', json.clientes_sem_documentos),
+    sec('🗂️', 'Processos sem pasta', json.processos_sem_pasta),
+    sec('👤', 'Casos sem responsável', json.casos_sem_responsavel),
+    sec('🚨', 'Alertas gerais', json.alertas_gerais)
+  ].filter(Boolean).join('\n');
+
+  ui.alert('🔍 Triagem Inteligente', msg.substring(0, 1500) + (msg.length > 1500 ? '\n…[ver IA_Log para completo]' : ''), ui.ButtonSet.OK);
+}
+
+// ---- Automação Assistida ----
+
+function criarTarefasDeEmailsRelevantes() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
+  if (!apiKey) {
+    ui.alert('⚠️ API não configurada', 'Configure a chave API em IA → Configurar Chave API.', ui.ButtonSet.OK);
+    return;
+  }
+
+  try {
+    // Busca e-mails da label de triagem
+    const label   = GmailApp.getUserLabelByName(F2.LABEL_TRIAGEM);
+    const threads = label ? label.getThreads(0, 15) : [];
+
+    if (!threads.length) {
+      ui.alert('📭 Nenhum e-mail', 'Não há e-mails na fila de triagem (' + F2.LABEL_TRIAGEM + ').', ui.ButtonSet.OK);
+      return;
+    }
+
+    const emailsTexto = threads.map((t, i) => {
+      const msg = t.getMessages()[0];
+      return (i + 1) + '. De: ' + msg.getFrom() + ' | Assunto: ' + t.getFirstMessageSubject() + ' | Data: ' + Utilities.formatDate(t.getLastMessageDate(), 'America/Sao_Paulo', 'dd/MM');
+    }).join('\n');
+
+    const prompt = `Você é um assistente jurídico. Analise os e-mails abaixo e sugira tarefas para o escritório.
+NÃO invente informações. Use apenas o que consta nos assuntos/remetentes.
+Responda com JSON:
+
+E-MAILS:
+${emailsTexto}
+
+Formato:
+{
+  "tarefas": [
+    {"email_nr": 1, "tarefa": "descrição da tarefa", "urgencia": "alta|media|baixa", "responsavel_sugerido": "Luiz|Kariny|Equipe"}
+  ]
+}`;
+
+    const resposta = _f4_chamarClaude(prompt, false);
+    if (!resposta) return;
+
+    _f5_logarIA_('criarTarefasDeEmailsRelevantes', prompt, F4.MODELO, resposta, 'E-mails triagem');
+
+    const json   = JSON.parse(resposta.replace(/```json\n?|\n?```/g, '').trim());
+    const tarefas = json.tarefas || [];
+
+    if (!tarefas.length) {
+      ui.alert('✅ Sem tarefas', 'A IA não identificou tarefas urgentes nos e-mails analisados.', ui.ButtonSet.OK);
+      return;
+    }
+
+    // Salva na aba Agenda (se existir)
+    const abaA = resolverAba_(ss, ['Agenda']);
+    let salvas = 0;
+    if (abaA) {
+      for (const t of tarefas) {
+        const email = threads[t.email_nr - 1];
+        const assunto = email ? email.getFirstMessageSubject() : 'E-mail #' + t.email_nr;
+        abaA.appendRow([
+          new Date(), '', assunto + ' [E-mail]', t.tarefa,
+          F3.STATUS_PENDENTE, t.responsavel_sugerido || '', t.urgencia || 'media', 'IA'
+        ]);
+        salvas++;
+      }
+    }
+
+    const msg = tarefas.map((t, i) => `${i + 1}. [${(t.urgencia || '').toUpperCase()}] ${t.tarefa} → ${t.responsavel_sugerido || 'Equipe'}`).join('\n');
+    ui.alert('📌 Tarefas criadas',
+      (salvas ? salvas + ' tarefa(s) salva(s) na Agenda.\n\n' : 'Aba Agenda não encontrada — tarefas não salvas.\n\n') + msg,
+      ui.ButtonSet.OK);
+
+  } catch (e) {
+    registrarLog('ERRO criarTarefasDeEmailsRelevantes: ' + e.message);
+    ui.alert('❌ Erro', e.message, ui.ButtonSet.OK);
+  }
+}
+
+function gerarChecklistPorTipoCaso() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
+  if (!apiKey) {
+    ui.alert('⚠️ API não configurada', 'Configure a chave API em IA → Configurar Chave API.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const r = ui.prompt('✅ Checklist por Tipo de Caso',
+    'Informe o tipo de caso ou área do direito:\n(Ex: Trabalhista, Família, Previdenciário, Consumidor)', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  const tipoCaso = r.getResponseText().trim();
+  if (!tipoCaso) return;
+
+  try {
+    const prompt = `Você é um assistente jurídico especializado em advocacia no Brasil.
+Gere um checklist operacional para um caso de ${tipoCaso} em escritório de advocacia.
+NÃO invente jurisprudência ou legislação específica sem certeza.
+Seja prático e objetivo.
+
+Responda com JSON:
+{
+  "tipo_caso": "${tipoCaso}",
+  "fase_inicial": ["item 1", "item 2"],
+  "documentos_necessarios": ["doc 1", "doc 2"],
+  "providencias_iniciais": ["prov 1"],
+  "acompanhamento": ["ação de acompanhamento 1"],
+  "documentos_peticao_inicial": ["peça 1"],
+  "alertas": ["alerta 1"]
+}`;
+
+    const resposta = _f4_chamarClaude(prompt, false);
+    if (!resposta) return;
+
+    _f5_logarIA_('gerarChecklistPorTipoCaso', prompt, F4.MODELO, resposta, tipoCaso);
+
+    const json = JSON.parse(resposta.replace(/```json\n?|\n?```/g, '').trim());
+
+    const sec = (t, l) => l && l.length ? '\n' + t + ':\n' + l.map(i => '  ☐ ' + i).join('\n') : '';
+
+    const msg = [
+      '✅ CHECKLIST — ' + (json.tipo_caso || tipoCaso).toUpperCase(),
+      sec('📋 Fase Inicial', json.fase_inicial),
+      sec('📂 Documentos Necessários', json.documentos_necessarios),
+      sec('⚖️ Providências Iniciais', json.providencias_iniciais),
+      sec('👁️ Acompanhamento', json.acompanhamento),
+      sec('📝 Peças para Petição Inicial', json.documentos_peticao_inicial),
+      json.alertas && json.alertas.length ? '\n⚠️ Alertas:\n' + json.alertas.map(a => '  • ' + a).join('\n') : ''
+    ].filter(Boolean).join('\n');
+
+    ui.alert('✅ Checklist: ' + tipoCaso, msg.substring(0, 1500), ui.ButtonSet.OK);
+
+  } catch (e) {
+    registrarLog('ERRO gerarChecklistPorTipoCaso: ' + e.message);
+    ui.alert('❌ Erro', e.message, ui.ButtonSet.OK);
+  }
+}
+
+function sugerirRespostaAoCliente() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
+  if (!apiKey) {
+    ui.alert('⚠️ API não configurada', 'Configure a chave API em IA → Configurar Chave API.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const r1 = ui.prompt('💬 Sugerir Resposta ao Cliente',
+    'Cole a mensagem recebida do cliente:', ui.ButtonSet.OK_CANCEL);
+  if (r1.getSelectedButton() !== ui.Button.OK) return;
+  const mensagemCliente = r1.getResponseText().trim();
+  if (!mensagemCliente) return;
+
+  const r2 = ui.prompt('💬 Contexto adicional (opcional)',
+    'Informe o nome do cliente e/ou processo relacionado (pode deixar em branco):', ui.ButtonSet.OK_CANCEL);
+  const contexto = r2.getSelectedButton() === ui.Button.OK ? r2.getResponseText().trim() : '';
+
+  try {
+    const prompt = `Você é um assistente do escritório Neves Marques Advocacia.
+Sugira uma resposta profissional e cordial para a mensagem do cliente abaixo.
+A resposta deve ser em português brasileiro, tom profissional mas acessível.
+NÃO faça promessas de resultados. NÃO invente informações jurídicas.
+Se a mensagem exigir análise jurídica aprofundada, sugira agendar reunião.
+Use [DADO NECESSÁRIO: xxx] onde faltar informação para completar a resposta.
+
+MENSAGEM DO CLIENTE:
+${mensagemCliente.substring(0, 1000)}
+
+CONTEXTO:
+${contexto || 'Não informado'}
+
+Responda com JSON:
+{
+  "resposta_sugerida": "texto da resposta ao cliente",
+  "tom": "informativo|solicitação de dados|encaminhamento",
+  "dados_faltantes": ["dado que falta para completar 1"],
+  "alerta": "alerta ao advogado sobre a mensagem (se houver)"
+}`;
+
+    const resposta = _f4_chamarClaude(prompt, false);
+    if (!resposta) return;
+
+    _f5_logarIA_('sugerirRespostaAoCliente', prompt, F4.MODELO, resposta, contexto || 'Cliente');
+
+    const json = JSON.parse(resposta.replace(/```json\n?|\n?```/g, '').trim());
+
+    const msg = [
+      '📝 RESPOSTA SUGERIDA:',
+      '─'.repeat(40),
+      json.resposta_sugerida || '—',
+      '',
+      '📌 Tom: ' + (json.tom || '—'),
+      json.dados_faltantes && json.dados_faltantes.length ? '\n⚠️ Dados faltantes:\n' + json.dados_faltantes.map(d => '  • ' + d).join('\n') : '',
+      json.alerta ? '\n🚨 ALERTA AO ADVOGADO: ' + json.alerta : '',
+      '',
+      '─'.repeat(40),
+      '⚠️ Revise e adapte antes de enviar ao cliente.'
+    ].filter(Boolean).join('\n');
+
+    ui.alert('💬 Sugestão de Resposta', msg.substring(0, 1500), ui.ButtonSet.OK);
+
+  } catch (e) {
+    registrarLog('ERRO sugerirRespostaAoCliente: ' + e.message);
+    ui.alert('❌ Erro', e.message, ui.ButtonSet.OK);
+  }
+}
+
+function sugerirCobrancaDocumentos() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
+  if (!apiKey) {
+    ui.alert('⚠️ API não configurada', 'Configure a chave API em IA → Configurar Chave API.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // Identifica cliente da célula ativa (aba Clientes ou Processos)
+  const aba  = SpreadsheetApp.getActiveSheet();
+  const linha = aba.getActiveCell().getRow();
+  const dados = aba.getDataRange().getValues();
+  if (dados.length < 2 || linha < 2) {
+    ui.alert('⚠️ Selecione uma linha de cliente ou processo.'); return;
+  }
+  const h   = dados[0].map(c => String(c).trim());
+  const row = dados[linha - 1];
+
+  const idCliente  = _f5_colVal_(h, row, ['ID', 'ID Cliente']);
+  const nomeCliente = _f5_colVal_(h, row, ['Nome', 'Nome Cliente', 'Cliente']);
+
+  if (!nomeCliente) { ui.alert('⚠️ Nome do cliente não encontrado na linha.'); return; }
+
+  const docs = _f5_docsCliente_(ss, idCliente, nomeCliente);
+
+  const prompt = `Você é um assistente do escritório Neves Marques Advocacia.
+Redija uma mensagem de cobrança cordial de documentos pendentes para o cliente.
+NÃO prometa resultados. NÃO use linguagem intimidatória. Tom: profissional e prestativo.
+
+CLIENTE: ${nomeCliente}
+DOCUMENTOS JÁ ENTREGUES: ${docs.lista.map(d => d.nome).join(', ') || 'Nenhum registrado'}
+DOCUMENTOS PENDENTES: ${docs.pendentes.join(', ') || 'Nenhum identificado'}
+
+Responda com JSON:
+{
+  "mensagem_whatsapp": "texto curto para WhatsApp (máx 300 chars)",
+  "mensagem_email": "texto formal para e-mail",
+  "documentos_cobrar": ["doc 1", "doc 2"],
+  "urgencia": "alta|media|baixa"
+}`;
+
+  try {
+    const resposta = _f4_chamarClaude(prompt, false);
+    if (!resposta) return;
+
+    _f5_logarIA_('sugerirCobrancaDocumentos', prompt, F4.MODELO, resposta, nomeCliente);
+
+    const json = JSON.parse(resposta.replace(/```json\n?|\n?```/g, '').trim());
+
+    const msg = [
+      '📂 COBRANÇA DE DOCUMENTOS — ' + nomeCliente,
+      '─'.repeat(40),
+      '📱 WhatsApp:\n' + (json.mensagem_whatsapp || '—'),
+      '',
+      '📧 E-mail:\n' + (json.mensagem_email || '—'),
+      '',
+      '📋 Documentos a cobrar: ' + (json.documentos_cobrar || []).join(', '),
+      '⚡ Urgência: ' + (json.urgencia || '—').toUpperCase(),
+      '',
+      '⚠️ Revise antes de enviar. Use "Rascunho Gmail" para envio controlado.'
+    ].join('\n');
+
+    ui.alert('📂 Sugestão de Cobrança', msg.substring(0, 1500), ui.ButtonSet.OK);
+
+  } catch (e) {
+    registrarLog('ERRO sugerirCobrancaDocumentos: ' + e.message);
+    ui.alert('❌ Erro', e.message, ui.ButtonSet.OK);
+  }
+}
+
+function sugerirPautaSemanal() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
+  if (!apiKey) {
+    ui.alert('⚠️ API não configurada', 'Configure a chave API em IA → Configurar Chave API.', ui.ButtonSet.OK);
+    return;
+  }
+
+  ui.alert('📅 Pauta Semanal', 'Coletando dados para sugestão de pauta… Aguarde.', ui.ButtonSet.OK);
+
+  try {
+    const dados  = _f5_coletarDadosSemanal_(ss);
+    const prompt = `Você é um assistente jurídico de apoio ao escritório Neves Marques Advocacia.
+Sugira uma pauta de trabalho para a próxima semana com base nos dados abaixo.
+Distribua as atividades entre Luiz Fernando e Kariny Marques quando possível.
+Priorize: prazos urgentes > processos parados > novos clientes > cobranças.
+NÃO invente informações. Use apenas o que consta.
+
+DADOS DO ESCRITÓRIO:
+${JSON.stringify(dados, null, 2).substring(0, F4.MAX_CHARS)}
+
+Responda com JSON:
+{
+  "semana": "semana sugerida",
+  "segunda": ["atividade 1 [responsável]", "atividade 2 [responsável]"],
+  "terca":   ["atividade 1 [responsável]"],
+  "quarta":  ["atividade 1 [responsável]"],
+  "quinta":  ["atividade 1 [responsável]"],
+  "sexta":   ["atividade 1 [responsável]"],
+  "prioridades_absolutas": ["prioridade 1", "prioridade 2"],
+  "obs": "observações gerais"
+}`;
+
+    const resposta = _f4_chamarClaude(prompt, true);
+    if (!resposta) return;
+
+    _f5_logarIA_('sugerirPautaSemanal', prompt, F4.MODELO_PRO, resposta, 'Escritório');
+
+    const json = JSON.parse(resposta.replace(/```json\n?|\n?```/g, '').trim());
+
+    const dias = [
+      ['Segunda', json.segunda], ['Terça', json.terca], ['Quarta', json.quarta],
+      ['Quinta', json.quinta],   ['Sexta', json.sexta]
+    ];
+
+    const msg = [
+      '📅 PAUTA SEMANAL SUGERIDA — ' + (json.semana || 'Próxima semana'),
+      '─'.repeat(40),
+      json.prioridades_absolutas && json.prioridades_absolutas.length
+        ? '🚨 PRIORIDADES ABSOLUTAS:\n' + json.prioridades_absolutas.map(p => '  ⚡ ' + p).join('\n') + '\n'
+        : '',
+      ...dias.map(([dia, ativs]) =>
+        ativs && ativs.length ? '📌 ' + dia + ':\n' + ativs.map(a => '  • ' + a).join('\n') : ''),
+      json.obs ? '\n💡 Obs: ' + json.obs : '',
+      '',
+      '─'.repeat(40),
+      '⚠️ Sugestão da IA — revise e ajuste conforme necessidade do escritório.'
+    ].filter(Boolean).join('\n');
+
+    ui.alert('📅 Pauta Semanal Sugerida', msg.substring(0, 1500), ui.ButtonSet.OK);
+
+  } catch (e) {
+    registrarLog('ERRO sugerirPautaSemanal: ' + e.message);
+    ui.alert('❌ Erro', e.message, ui.ButtonSet.OK);
   }
 }
