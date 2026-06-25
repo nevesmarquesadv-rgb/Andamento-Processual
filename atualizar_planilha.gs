@@ -110,6 +110,15 @@ const FASE3 = {
   DIAS_ANIVERSARIO : 3     // Alertar X dias antes do aniversário do cliente
 };
 
+// --- FASE 3 (controle de prazos e alertas) ---
+const F3 = {
+  STATUS_PENDENTE  : 'Pendente de conferência',
+  STATUS_CONFIRMADO: 'Confirmado',
+  STATUS_REALIZADO : 'Realizado',
+  STATUS_CANCELADO : 'Cancelado',
+  DIAS_URGENTE     : 2   // prazo ≤ N dias → urgente
+};
+
 // --- Fase 4 (IA Claude) ---
 const F4 = {
   MODELO       : 'claude-haiku-4-5-20251001',  // rápido e econômico
@@ -297,11 +306,12 @@ function onOpen() {
     .addSeparator()
 
     .addSubMenu(ui.createMenu('🔔 Alertas & Relatórios')
-      .addItem('⚡ Verificar Prazos Agora',          'verificarPrazos')
-      .addItem('💤 Processos sem Movimento',          'alertarProcessosSemMovimento')
-      .addItem('🎂 Aniversários de Clientes',         'verificarAniversariosClientes')
-      .addItem('📊 Relatório Semanal (enviar agora)', 'relatorioSemanal')
-      .addItem('💾 Backup Semanal (executar agora)',  'backupSemanal'))
+      .addItem('⚡ Verificar Prazos Agora',               'verificarPrazos')
+      .addItem('✅ Confirmar Prazo Selecionado',           'confirmarPrazo')
+      .addItem('💤 Processos sem Movimento',               'alertarProcessosSemMovimento')
+      .addItem('🎂 Aniversários de Clientes',              'verificarAniversariosClientes')
+      .addItem('📊 Relatório Semanal (enviar agora)',      'relatorioSemanal')
+      .addItem('💾 Backup Semanal (executar agora)',       'backupSemanal'))
 
     .addSeparator()
 
@@ -673,15 +683,23 @@ function adicionarAgenda_(ss, dados, linhaProc, headers, urgente) {
   const novaLinha  = new Array(hAg.length).fill('');
   function s(col, val) { const i = hAg.indexOf(col); if (i >= 0) novaLinha[i] = val; }
 
-  s('Data',               prazoStr);
-  s('Tipo',               urgente ? 'Prazo Processual' : 'Acompanhamento');
-  s('Nº Processo / Ref.', `${dados.numProcesso} — ${cliente}`);
-  s('Cliente',            String(cliente));
-  s('Tribunal / Local',   String(tribunal));
-  s('Descrição',          dados.descMovimentacao.substring(0, 300));
-  s('Responsável',        String(responsavel));
-  s('Status',             'Pendente');
-  s('Prioridade',         urgente ? '🔴 Alta' : '🟡 Média');
+  const capturaStr = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm');
+  s('Data',                  prazoStr);
+  s('Tipo',                  urgente ? 'Prazo Processual' : 'Acompanhamento');
+  s('Tipo de prazo',         urgente ? 'Prazo Processual' : 'Acompanhamento');
+  s('Nº Processo / Ref.',    String(dados.numProcesso) + ' — ' + String(cliente));
+  s('Processo vinculado',    String(dados.numProcesso));
+  s('Data fatal',            prazoStr);
+  s('Cliente',               String(cliente));
+  s('Tribunal / Local',      String(tribunal));
+  s('Descrição',             dados.descMovimentacao.substring(0, 300));
+  s('Responsável',           String(responsavel));
+  s('Status',                F3.STATUS_PENDENTE);
+  s('Prioridade',            urgente ? '🔴 Alta' : '🟡 Média');
+  s('Origem do prazo',       'Captura automática — e-mail judicial');
+  s('Data de captura',       capturaStr);
+  s('Confirmado por humano', '');
+  s('Enviado alerta',        '');
 
   abaAg.appendRow(novaLinha);
 }
@@ -900,20 +918,40 @@ function atualizarKPIs() {
     const totalProcessos  = contarLinhas(ss, 'Processos', 7,  'Ativo',  '');
     const prazosNaSemana  = contarPrazosNaSemana(ss);
 
-    const dash = getSheet_(ss, 'Dashboard');
-    if (!dash) return;
+    // Novos KPIs de agenda (FASE 3)
+    const kpis = _f3_kpisAgenda_(ss);
 
-    // KPIs ficam na linha 3: col A=prospectos, E=clientes, I=processos, M=prazos
-    dash.getRange('A3').setValue(totalProspectos);
-    dash.getRange('E3').setValue(totalClientes);
-    dash.getRange('I3').setValue(totalProcessos);
-    dash.getRange('M3').setValue(prazosNaSemana);
+    const dash = getSheet_(ss, 'Dashboard');
+    if (dash) {
+      // KPIs originais: linha 3, cols A/E/I/M
+      dash.getRange('A3').setValue(totalProspectos);
+      dash.getRange('E3').setValue(totalClientes);
+      dash.getRange('I3').setValue(totalProcessos);
+      dash.getRange('M3').setValue(prazosNaSemana);
+
+      // KPIs de agenda: linha 3, cols Q/U/Y/AC/AG/AK/AO
+      // (adicionar labels nessas células no Dashboard para visualização)
+      dash.getRange('Q3').setValue(kpis.hoje);
+      dash.getRange('U3').setValue(kpis.amanha);
+      dash.getRange('Y3').setValue(kpis.semana);
+      dash.getRange('AC3').setValue(kpis.vencidos);
+      dash.getRange('AG3').setValue(kpis.semResp);
+      dash.getRange('AK3').setValue(kpis.pendConf);
+      dash.getRange('AO3').setValue(kpis.processosParados);
+    }
 
     SpreadsheetApp.flush();
     registrarLog('KPIs atualizados: Prospectos=' + totalProspectos
       + ' | Clientes=' + totalClientes
       + ' | Processos=' + totalProcessos
-      + ' | Prazos/semana=' + prazosNaSemana);
+      + ' | Prazos/semana=' + prazosNaSemana
+      + ' | Hoje=' + kpis.hoje
+      + ' | Amanhã=' + kpis.amanha
+      + ' | 7d=' + kpis.semana
+      + ' | Vencidos=' + kpis.vencidos
+      + ' | SemResp=' + kpis.semResp
+      + ' | PendConf=' + kpis.pendConf
+      + ' | Parados=' + kpis.processosParados);
 
   } catch (err) {
     registrarLog('ERRO atualizarKPIs: ' + err.message);
@@ -1036,50 +1074,99 @@ function criarPastaComSubpastas(nomePasta) {
 // ============================================================
 function verificarPrazos() {
   try {
-    const ss   = SpreadsheetApp.getActiveSpreadsheet();
-    const aba  = getSheet_(ss, 'Agenda');
+    const ss  = SpreadsheetApp.getActiveSpreadsheet();
+    const aba = getSheet_(ss, 'Agenda');
     if (!aba) return;
 
-    const dados = aba.getDataRange().getValues();
-    const hoje  = new Date(); hoje.setHours(0,0,0,0);
-    const limite = new Date(hoje); limite.setDate(hoje.getDate() + CFG.DIAS_ALERTA);
-
-    const urgentes = []; // <= 2 dias
-    const normais  = []; // 3-7 dias
-    const vencidos = []; // prazo já passou
-
-    for (let i = 1; i < dados.length; i++) {
-      const celData = dados[i][0];
-      const status  = String(dados[i][8]).trim();
-      if (!celData || status === 'Realizado' || status === 'Cancelado') continue;
-      if (String(celData).includes('AGENDA')) continue;
-
-      const data = new Date(celData); if (isNaN(data.getTime())) continue;
-      data.setHours(0,0,0,0);
-
-      const item = {
-        data        : data,
-        dias        : Math.ceil((data - hoje) / 86400000),
-        tipo        : String(dados[i][2]).trim(),
-        processo    : String(dados[i][3]).trim(),
-        cliente     : String(dados[i][4]).trim(),
-        descricao   : String(dados[i][6]).trim(),
-        responsavel : String(dados[i][7]).trim(),
-        prioridade  : String(dados[i][9]).trim(),
-        status      : status
-      };
-
-      if (data < hoje)       { vencidos.push(item); }
-      else if (item.dias <= 2) { urgentes.push(item); }
-      else if (data <= limite) { normais.push(item); }
+    const linhas = aba.getDataRange().getValues();
+    const cab    = encontrarCabecalho_(linhas, 'Data');
+    if (!cab) {
+      registrarLog('verificarPrazos: cabeçalho não encontrado na aba Agenda.');
+      return;
     }
 
-    if (!urgentes.length && !normais.length && !vencidos.length) {
+    const h = cab.headers;
+    // Suporta tanto o layout antigo quanto o SCHEMA novo
+    const colDt  = h.indexOf('Data') >= 0 ? h.indexOf('Data') : h.indexOf('Data fatal');
+    const colSt  = h.indexOf('Status');
+    const colTp  = h.indexOf('Tipo') >= 0 ? h.indexOf('Tipo') : h.indexOf('Tipo de prazo');
+    const colPrc = h.indexOf('Nº Processo / Ref.') >= 0
+                   ? h.indexOf('Nº Processo / Ref.') : h.indexOf('Processo vinculado');
+    const colCli = h.indexOf('Cliente');
+    const colDsc = h.indexOf('Descrição');
+    const colRsp = h.indexOf('Responsável');
+    const colPri = h.indexOf('Prioridade');
+    const colCnf = h.indexOf('Confirmado por humano');
+    const colAlt = h.indexOf('Enviado alerta');
+    if (colDt < 0) { registrarLog('verificarPrazos: coluna "Data" não encontrada.'); return; }
+
+    const hoje   = new Date(); hoje.setHours(0, 0, 0, 0);
+    const limite = new Date(hoje); limite.setDate(hoje.getDate() + CFG.DIAS_ALERTA);
+
+    const urgentes = []; // ≤ F3.DIAS_URGENTE dias, confirmados
+    const normais  = []; // 3–CFG.DIAS_ALERTA dias, confirmados
+    const vencidos = []; // já passaram, status aberto
+    const naoConf  = []; // "Pendente de conferência" dentro da janela de alerta
+
+    const idxParaMarcar = [];
+
+    for (let i = cab.cabRow + 1; i < linhas.length; i++) {
+      const celData = linhas[i][colDt];
+      const status  = colSt >= 0 ? String(linhas[i][colSt] || '').trim() : '';
+      if (!celData || String(celData).includes('AGENDA')) continue;
+      if (status === F3.STATUS_REALIZADO || status === F3.STATUS_CANCELADO) continue;
+
+      const data = new Date(celData);
+      if (isNaN(data.getTime())) continue;
+      data.setHours(0, 0, 0, 0);
+
+      // Fora da janela de alerta — sem limites negativos (vencidos sempre inclusos)
+      if (data > limite) continue;
+
+      const dias = Math.ceil((data - hoje) / 86400000);
+      const item = {
+        linha      : i + 1,
+        data       : data,
+        dias       : dias,
+        tipo       : colTp  >= 0 ? String(linhas[i][colTp]  || '').trim() : '',
+        processo   : colPrc >= 0 ? String(linhas[i][colPrc] || '').trim() : '',
+        cliente    : colCli >= 0 ? String(linhas[i][colCli] || '').trim() : '',
+        descricao  : colDsc >= 0 ? String(linhas[i][colDsc] || '').trim() : '',
+        responsavel: colRsp >= 0 ? String(linhas[i][colRsp] || '').trim() : '',
+        prioridade : colPri >= 0 ? String(linhas[i][colPri] || '').trim() : '',
+        confirmado : colCnf >= 0 ? String(linhas[i][colCnf] || '').trim() : '',
+        status     : status
+      };
+
+      if (status === F3.STATUS_PENDENTE) {
+        naoConf.push(item);        // pendente de conferência humana
+      } else if (dias < 0) {
+        vencidos.push(item);
+      } else if (dias <= F3.DIAS_URGENTE) {
+        urgentes.push(item);
+      } else {
+        normais.push(item);
+      }
+
+      idxParaMarcar.push(i);
+    }
+
+    if (!urgentes.length && !normais.length && !vencidos.length && !naoConf.length) {
       registrarLog('verificarPrazos: nenhum prazo a alertar hoje.');
       return;
     }
 
-    _enviarEmailPrazos(urgentes, normais, vencidos, ss.getId());
+    _f3_enviarEmailPrazos_(urgentes, normais, vencidos, naoConf, ss.getId());
+
+    // Registra "Enviado alerta" nas linhas onde o campo existe e ainda não foi preenchido
+    if (colAlt >= 0) {
+      const ts = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm');
+      idxParaMarcar.forEach(function(i) {
+        if (!String(linhas[i][colAlt] || '').trim()) {
+          aba.getRange(i + 1, colAlt + 1).setValue(ts);
+        }
+      });
+    }
 
   } catch (err) {
     registrarLog('ERRO verificarPrazos: ' + err.message);
@@ -3022,17 +3109,25 @@ function appendAgenda_(abaAg, item) {
     if (numItem.length > 0 && dataCel === item.data && refCel.includes(numItem)) return;
   }
 
+  const capturaStr2 = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm');
   const linha = new Array(h.length).fill('');
   function s(col, val) { const i = h.indexOf(col); if (i >= 0) linha[i] = val; }
-  s('Data', item.data);
-  s('Tipo', item.tipo);
-  s('Nº Processo / Ref.', item.proc);
-  s('Cliente', item.cliente || '');
-  s('Tribunal / Local', item.tribunal || '');
-  s('Descrição', item.desc || '');
-  s('Responsável', item.resp || '');
-  s('Status', 'Pendente');
-  s('Prioridade', item.prioridade || '🟡 Média');
+  s('Data',                  item.data);
+  s('Data fatal',            item.data);
+  s('Tipo',                  item.tipo);
+  s('Tipo de prazo',         item.tipo);
+  s('Nº Processo / Ref.',    item.proc);
+  s('Processo vinculado',    item.proc ? item.proc.split(' ')[0] : '');
+  s('Cliente',               item.cliente || '');
+  s('Tribunal / Local',      item.tribunal || '');
+  s('Descrição',             item.desc || '');
+  s('Responsável',           item.resp || '');
+  s('Status',                F3.STATUS_PENDENTE);
+  s('Prioridade',            item.prioridade || '🟡 Média');
+  s('Origem do prazo',       'Captura automática — e-mail judicial');
+  s('Data de captura',       capturaStr2);
+  s('Confirmado por humano', '');
+  s('Enviado alerta',        '');
   abaAg.appendRow(linha);
 }
 
@@ -3459,5 +3554,264 @@ function _f2_marcarTriagem_(thread) {
     if (label) thread.addLabel(label);
   } catch (e) {
     Logger.log('[F2] _f2_marcarTriagem_ erro: ' + e.message);
+  }
+}
+
+
+// ████████████████████████████████████████████████████████████
+// FASE 3 — PRAZOS, AGENDA E ALERTAS
+// Confirmação humana obrigatória, status "Pendente de conferência",
+// 7 KPIs de agenda, alertas configuráveis por antecedência.
+// ████████████████████████████████████████████████████████████
+
+// ──────────────────────────────────────────────────────────
+// CONFIRMAÇÃO MANUAL DE PRAZO
+// Selecione uma linha na aba Agenda e use o menu
+// 🔔 Alertas → ✅ Confirmar Prazo Selecionado.
+// Permite revisar/corrigir a data antes de confirmar.
+// ──────────────────────────────────────────────────────────
+function confirmarPrazo() {
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const aba   = ss.getActiveSheet();
+  const range = ss.getActiveRange();
+  const ui    = SpreadsheetApp.getUi();
+
+  if (!ehAba_(aba, 'Agenda')) {
+    ui.alert('Selecione uma linha na aba Agenda antes de confirmar o prazo.');
+    return;
+  }
+
+  const linhas = aba.getDataRange().getValues();
+  const cab    = encontrarCabecalho_(linhas, 'Data');
+  if (!cab) {
+    ui.alert('Cabeçalho não encontrado na aba Agenda.');
+    return;
+  }
+
+  const h     = cab.headers;
+  const linha = range.getRow();
+  if (linha <= cab.cabRow + 1) {
+    ui.alert('Selecione uma linha de dados — não o cabeçalho.');
+    return;
+  }
+
+  const colSt  = h.indexOf('Status');
+  const colDt  = h.indexOf('Data') >= 0 ? h.indexOf('Data') : h.indexOf('Data fatal');
+  const colCnf = h.indexOf('Confirmado por humano');
+  const status = colSt >= 0 ? String(linhas[linha - 1][colSt] || '').trim() : '';
+
+  if (status === F3.STATUS_REALIZADO || status === F3.STATUS_CANCELADO) {
+    ui.alert('Este prazo já está como "' + status + '". Nenhuma alteração feita.');
+    return;
+  }
+
+  const dataAtual = colDt >= 0
+    ? normalizarDataParaTexto_(linhas[linha - 1][colDt])
+    : '';
+
+  const resp = ui.prompt(
+    '✅ Confirmar Prazo',
+    'Data atual registrada: ' + (dataAtual || '(coluna Data não encontrada)') + '\n\n' +
+    'Para MANTER a data, deixe em branco e clique OK.\n' +
+    'Para CORRIGIR a data, informe a nova data (DD/MM/AAAA):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (resp.getSelectedButton() !== ui.Button.OK) return;
+
+  const novaDataStr = resp.getResponseText().trim();
+  let novaData = null;
+  if (novaDataStr) {
+    const p = novaDataStr.split('/');
+    if (p.length !== 3) {
+      ui.alert('Formato inválido. Use DD/MM/AAAA. Confirmação cancelada.');
+      return;
+    }
+    novaData = new Date(Number(p[2]), Number(p[1]) - 1, Number(p[0]));
+    if (isNaN(novaData.getTime())) {
+      ui.alert('Data inválida: ' + novaDataStr + '. Confirmação cancelada.');
+      return;
+    }
+  }
+
+  // Aplica as alterações
+  const usuario  = Session.getActiveUser().getEmail() || 'usuário';
+  const agora    = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm');
+  const confirma = usuario + ' em ' + agora;
+
+  function setCel(nomeCol, valor) {
+    const idx = h.indexOf(nomeCol);
+    if (idx >= 0) aba.getRange(linha, idx + 1).setValue(valor);
+  }
+
+  setCel('Status', F3.STATUS_CONFIRMADO);
+  if (colCnf >= 0) aba.getRange(linha, colCnf + 1).setValue(confirma);
+
+  if (novaData) {
+    const dtFmt = Utilities.formatDate(novaData, 'America/Sao_Paulo', 'dd/MM/yyyy');
+    setCel('Data',       dtFmt);
+    setCel('Data fatal', dtFmt);
+  }
+
+  SpreadsheetApp.flush();
+  const logMsg = 'Prazo confirmado por ' + confirma
+    + (novaData ? ' | Data revisada para: '
+       + Utilities.formatDate(novaData, 'America/Sao_Paulo', 'dd/MM/yyyy') : '');
+  registrarLog(logMsg);
+  ui.alert('✅ Prazo confirmado com sucesso!\n\n' + logMsg);
+}
+
+// ──────────────────────────────────────────────────────────
+// 7 KPIs DE AGENDA
+// Chamado por atualizarKPIs(). Tolerante à ausência da aba
+// ou de colunas específicas (retorna zeros).
+// ──────────────────────────────────────────────────────────
+function _f3_kpisAgenda_(ss) {
+  const zero = { hoje: 0, amanha: 0, semana: 0, vencidos: 0,
+                 semResp: 0, pendConf: 0, processosParados: 0 };
+  try {
+    const abaAg = getSheet_(ss, 'Agenda');
+    if (!abaAg) return zero;
+
+    const linhas = abaAg.getDataRange().getValues();
+    const cab    = encontrarCabecalho_(linhas, 'Data');
+    if (!cab) return zero;
+
+    const h      = cab.headers;
+    const colDt  = h.indexOf('Data') >= 0 ? h.indexOf('Data') : h.indexOf('Data fatal');
+    const colSt  = h.indexOf('Status');
+    const colRsp = h.indexOf('Responsável');
+    if (colDt < 0) return zero;
+
+    const agora   = new Date(); agora.setHours(0, 0, 0, 0);
+    const amanha  = new Date(agora); amanha.setDate(agora.getDate() + 1);
+    const em7dias = new Date(agora); em7dias.setDate(agora.getDate() + 7);
+
+    let hoje = 0, amanha_ = 0, semana = 0, vencidos = 0, semResp = 0, pendConf = 0;
+
+    for (let r = cab.cabRow + 1; r < linhas.length; r++) {
+      const celData = linhas[r][colDt];
+      const status  = colSt  >= 0 ? String(linhas[r][colSt]  || '').trim() : '';
+      const resp    = colRsp >= 0 ? String(linhas[r][colRsp] || '').trim() : '';
+
+      if (!celData || String(celData).includes('AGENDA')) continue;
+      if (status === F3.STATUS_REALIZADO || status === F3.STATUS_CANCELADO) continue;
+
+      const data = new Date(celData);
+      if (isNaN(data.getTime())) continue;
+      data.setHours(0, 0, 0, 0);
+
+      if      (data < agora)                          { vencidos++; }
+      else if (data.getTime() === agora.getTime())    { hoje++; }
+      else if (data.getTime() === amanha.getTime())   { amanha_++; }
+      else if (data > agora && data <= em7dias)       { semana++; }
+
+      if (!resp)                            semResp++;
+      if (status === F3.STATUS_PENDENTE)    pendConf++;
+    }
+
+    const processosParados = _r3_processosInativos(ss).length;
+    return { hoje, amanha: amanha_, semana, vencidos, semResp, pendConf, processosParados };
+
+  } catch (e) {
+    Logger.log('[F3] _f3_kpisAgenda_ erro: ' + e.message);
+    return zero;
+  }
+}
+
+// ──────────────────────────────────────────────────────────
+// E-MAIL DE PRAZOS — versão FASE 3
+// Inclui seção de "Pendentes de conferência" além de
+// urgentes, normais e vencidos.
+// ──────────────────────────────────────────────────────────
+function _f3_enviarEmailPrazos_(urgentes, normais, vencidos, naoConf, ssId) {
+  const hoje = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'dd/MM/yyyy');
+
+  function tabela(itens, corHeader) {
+    let t = '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+      + '<tr style="background:' + corHeader + ';color:#fff;">'
+      + '<th style="padding:7px 10px;text-align:left;">Data / Situação</th>'
+      + '<th style="padding:7px 10px;text-align:left;">Cliente</th>'
+      + '<th style="padding:7px 10px;text-align:left;">Ação Necessária</th>'
+      + '<th style="padding:7px 10px;text-align:left;">Responsável</th>'
+      + '<th style="padding:7px 10px;text-align:left;">Confirmado</th>'
+      + '</tr>';
+    itens.forEach(function(p, idx) {
+      const bg  = idx % 2 === 0 ? '#ffffff' : '#f9f9f9';
+      const dt  = Utilities.formatDate(p.data, 'America/Sao_Paulo', 'dd/MM/yyyy');
+      const lag = p.dias < 0
+        ? '<span style="color:#c62828;font-weight:bold;">' + Math.abs(p.dias) + 'd VENCIDO</span>'
+        : '<strong>' + dt + '</strong> (' + p.dias + 'd)';
+      const confTxt = p.confirmado
+        ? '<span style="color:#2e7d32;font-size:11px;">✅ ' + p.confirmado + '</span>'
+        : '<span style="color:#e65100;font-size:11px;">⏳ Aguardando</span>';
+      t += '<tr style="background:' + bg + ';">'
+        + '<td style="padding:7px 10px;">' + lag + '</td>'
+        + '<td style="padding:7px 10px;">' + (p.cliente || p.processo) + '</td>'
+        + '<td style="padding:7px 10px;font-size:12px;">' + p.descricao.substring(0, 200) + '</td>'
+        + '<td style="padding:7px 10px;">' + (p.responsavel || '—') + '</td>'
+        + '<td style="padding:7px 10px;">' + confTxt + '</td>'
+        + '</tr>';
+    });
+    return t + '</table>';
+  }
+
+  let corpo = '<div style="font-family:Arial,sans-serif;max-width:760px;margin:0 auto;">'
+    + '<div style="background:#1a237e;color:#fff;padding:20px 24px;border-radius:8px 8px 0 0;">'
+    + '<h2 style="margin:0 0 4px;">⚖️ Neves Marques Advocacia</h2>'
+    + '<p style="margin:0;font-size:14px;">Relatório de Prazos — ' + hoje + '</p>'
+    + '</div>';
+
+  if (naoConf.length) {
+    corpo += '<div style="background:#e8eaf6;border-left:5px solid #3949ab;padding:16px 20px;margin:12px 0;">'
+      + '<h3 style="margin:0 0 10px;color:#1a237e;">⚠️ PENDENTES DE CONFERÊNCIA — '
+      + naoConf.length + ' prazo(s) aguardando confirmação humana</h3>'
+      + '<p style="margin:0 0 10px;font-size:13px;color:#555;">'
+      + 'Estes prazos foram capturados automaticamente. Nenhum deve ser tratado como definitivo '
+      + 'sem confirmação manual (menu ✅ Confirmar Prazo Selecionado).</p>'
+      + tabela(naoConf, '#3949ab') + '</div>';
+  }
+
+  if (vencidos.length) {
+    corpo += '<div style="background:#fce4ec;border-left:5px solid #880e4f;padding:16px 20px;margin:12px 0;">'
+      + '<h3 style="margin:0 0 10px;color:#880e4f;">⛔ VENCIDOS — ' + vencidos.length + ' prazo(s) em atraso</h3>'
+      + tabela(vencidos, '#880e4f') + '</div>';
+  }
+
+  if (urgentes.length) {
+    corpo += '<div style="background:#ffebee;border-left:5px solid #c62828;padding:16px 20px;margin:12px 0;">'
+      + '<h3 style="margin:0 0 10px;color:#c62828;">🔴 URGENTE — ' + urgentes.length
+      + ' prazo(s) em até ' + F3.DIAS_URGENTE + ' dias</h3>'
+      + tabela(urgentes, '#c62828') + '</div>';
+  }
+
+  if (normais.length) {
+    corpo += '<div style="background:#fff8e1;border-left:5px solid #f57f17;padding:16px 20px;margin:12px 0;">'
+      + '<h3 style="margin:0 0 10px;color:#f57f17;">🟡 ATENÇÃO — ' + normais.length
+      + ' prazo(s) nos próximos ' + CFG.DIAS_ALERTA + ' dias</h3>'
+      + tabela(normais, '#f57f17') + '</div>';
+  }
+
+  corpo += '<div style="background:#f5f5f5;padding:14px 20px;border-radius:0 0 8px 8px;font-size:12px;color:#666;">'
+    + '<a href="https://docs.google.com/spreadsheets/d/' + ssId
+    + '" style="color:#1a237e;font-weight:bold;">📊 Abrir Dashboard</a>'
+    + ' &nbsp;|&nbsp; Neves Marques Advocacia — OAB/RJ 253.413 · OAB/RJ 241.456'
+    + '</div></div>';
+
+  const numCriticos = vencidos.length + urgentes.length + naoConf.length;
+  const assunto = numCriticos > 0
+    ? '🔴 ' + numCriticos + ' prazo(s) crítico(s) — ' + hoje
+    : '🟡 ' + normais.length + ' prazo(s) esta semana — ' + hoje;
+
+  const destinos = [CFG.EMAIL_LUIZ, CFG.EMAIL_KARINY]
+    .filter(function(e) { return e && !e.includes('PREENCHA'); })
+    .join(',');
+
+  if (destinos) {
+    GmailApp.sendEmail(destinos, assunto, 'Visualize em HTML.', { htmlBody: corpo });
+    registrarLog('E-mail de prazos (F3) enviado para: ' + destinos
+      + ' | NãoConf=' + naoConf.length
+      + ' Vencidos=' + vencidos.length
+      + ' Urgentes=' + urgentes.length
+      + ' Normais=' + normais.length);
   }
 }

@@ -80,6 +80,24 @@ pastas, prazos, backup, migração, log), **Fase 2** (Procuração/Contrato),
 - `inserirNovoProcesso_` ainda insere o processo na aba `Processos` com cliente "A identificar" (comportamento atual preservado). A label `PJe-Triagem` + registro na aba `Andamentos` são camadas adicionais de rastreabilidade, não substitutos.
 - A IA (FASE 4) não é chamada durante o processamento de e-mails — classificação é só por palavras-chave; humano revisa.
 
+## ✅ Implementado — FASE 3 (Prazos, Agenda e Alertas)
+
+| Item | O que mudou |
+|------|-------------|
+| Status padrão | Todos os prazos capturados automaticamente (`adicionarAgenda_`, `appendAgenda_`) nascem com status **"Pendente de conferência"** em vez de "Pendente". |
+| `confirmarPrazo()` | Menu `🔔 → ✅ Confirmar Prazo Selecionado`. Usuário seleciona linha na aba Agenda, pode corrigir a data e confirma. O script grava `Status = 'Confirmado'` e `Confirmado por humano = email + timestamp`. Usa `encontrarCabecalho_` + `h.indexOf()` — tolerante a qualquer layout de cabeçalho. |
+| `const F3` | Nova constante central com os 5 status (`STATUS_PENDENTE`, `STATUS_CONFIRMADO`, `STATUS_REALIZADO`, `STATUS_CANCELADO`) e `DIAS_URGENTE = 2`. Toda a FASE 3 usa `F3.*` em vez de strings literais. |
+| `verificarPrazos()` reescrita | Usa `encontrarCabecalho_()` + lookup por nome de coluna (não mais índices fixos). Distingue 4 listas: urgentes (≤ `F3.DIAS_URGENTE` dias), normais (até `CFG.DIAS_ALERTA` dias), vencidos (passados), e **naoConf** ("Pendente de conferência"). Após envio do e-mail, grava timestamp em `Enviado alerta` se a coluna existir. |
+| `_f3_enviarEmailPrazos_()` | Nova função de e-mail (substitui `_enviarEmailPrazos` na `verificarPrazos`). Adiciona seção azul "⚠️ PENDENTES DE CONFERÊNCIA" com aviso de que não são definitivos. Tabela inclui coluna "Confirmado" com ✅ ou ⏳. |
+| 7 novos KPIs (`_f3_kpisAgenda_`) | Prazos hoje · Amanhã · Próximos 7 dias · Vencidos · Sem responsável · Pendentes de conferência · Processos parados (+30 dias). Chamado por `atualizarKPIs()`, que grava nos valores nas células Q3, U3, Y3, AC3, AG3, AK3, AO3 do Dashboard (adicionar labels nessas células). |
+| Log de KPIs | `atualizarKPIs()` agora loga todos os 7 novos KPIs além dos 4 originais. |
+
+### Decisões de segurança da FASE 3
+- `_f3_enviarEmailPrazos_` preserva `_enviarEmailPrazos` (função antiga, chamada pela função antiga `verificarPrazos` que foi substituída). Dead code harmless; pode ser removida futuramente.
+- A confirmação grava apenas nas colunas que existirem na aba real (via `h.indexOf`). Se a aba Agenda ainda usa o layout antigo (sem "Confirmado por humano"), o script funciona normalmente — só atualiza "Status".
+- KPIs do Dashboard usam `best-effort`: se a aba Dashboard não existir, `atualizarKPIs()` continua sem erro (bloco `if (dash)`).
+- Nenhuma alteração foi feita nas abas existentes (Clientes, Processos, Agenda, Financeiro) automaticamente.
+
 ## 🔜 Estrutural — próxima fase (a aprovar)
 
 - **R4 — IA em lote sem estourar 6 min**: `analisarTodosProcessos` deve
