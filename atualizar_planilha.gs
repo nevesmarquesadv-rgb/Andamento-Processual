@@ -133,6 +133,28 @@ const ESCRITORIO = {
   COMARCA  : 'Nova Iguaçu'
 };
 
+// --- FASE 2 (ingestão inteligente de e-mails) ---
+const F2 = {
+  PROP_LAST_RUN  : 'EMAIL_LAST_RUN',
+  PROP_DRY_RUN   : 'EMAIL_DRY_RUN',
+  LABEL_TRIAGEM  : 'PJe-Triagem',
+  TIPOS: {
+    ANDAMENTO         : 'andamento',
+    INTIMACAO         : 'intimacao',
+    PRAZO             : 'prazo',
+    PUBLICACAO        : 'publicacao',
+    AUDIENCIA         : 'audiencia',
+    SENTENCA          : 'sentenca',
+    DECISAO           : 'decisao',
+    DESPACHO          : 'despacho',
+    JUNTADA           : 'juntada',
+    CERTIDAO          : 'certidao',
+    ATO_ORDINATORIO   : 'ato_ordinatorio',
+    COM_ADMINISTRATIVA: 'com_administrativa',
+    IRRELEVANTE       : 'irrelevante'
+  }
+};
+
 
 // ============================================================
 // FASE 1 — MODELO DE DADOS (SCHEMA)
@@ -250,6 +272,8 @@ function onOpen() {
 
     .addSubMenu(ui.createMenu('📨 Andamento Processual')
       .addItem('🔄 Processar E-mails Judiciais agora', 'processarEmailsJudiciais')
+      .addItem('📅 Reprocessar por Período',           'reprocessarEmailsPorPeriodo')
+      .addItem('🧪 Ativar / Desativar Modo Teste',     'alternarModoTeste')
       .addItem('📌 Aplicar Atualizações Pendentes',    'aplicarTodasAtualizacoesPendentes'))
 
     .addSeparator()
@@ -315,24 +339,38 @@ function onOpen() {
 // PONTO DE ENTRADA PRINCIPAL (roda no gatilho diário das 7h)
 // ──────────────────────────────────────────────────────────
 function processarEmailsJudiciais() {
-  const ss = getPlanilha_();
+  const ss     = getPlanilha_();
+  const dryRun = _f2_isDryRun_();
+  if (dryRun) registrarLog('[TESTE] Modo Dry Run ATIVO — nenhuma escrita será feita na planilha.');
+
   garantirLabelProcessado_();
   garantirLabelRevisar_();
+  _f2_garantirLabelTriagem_();
 
-  const query = buildGmailQuery_();
+  // Cursor incremental: só processa e-mails recebidos após a última execução bem-sucedida.
+  // Na primeira execução (sem cursor) usa a janela fixa de CONFIG.diasRetroativos.
+  const props      = PropertiesService.getScriptProperties();
+  const lastRunStr = props.getProperty(F2.PROP_LAST_RUN);
+  const desde      = lastRunStr ? new Date(lastRunStr) : null;
+  const agora      = new Date();
+
+  const query   = buildGmailQuery_(desde);
   const threads = GmailApp.search(query, 0, 50);
-  Logger.log(`Encontrados ${threads.length} threads para processar`);
+  Logger.log('[F2] Cursor: ' + (lastRunStr || 'inicial (janela de ' + CONFIG.diasRetroativos + 'd)') + ' | ' + threads.length + ' threads encontradas');
 
   let totalAtualizados = 0;
-  let totalNovos = 0;
-  let alertasUrgentes = [];
-  let paraRevisar = [];
+  let totalNovos       = 0;
+  let totalDedup       = 0;
+  let alertasUrgentes  = [];
+  let paraRevisar      = [];
+  const triagemThreads = new Set(); // threads com processos novos (triagem)
 
   for (const thread of threads) {
     if (jaProcessado_(thread) || jaParaRevisar_(thread)) continue;
 
     let reconhecidos = 0; // mensagens de remetente judicial reconhecido
-    let extraidos = 0;    // mensagens que o parser conseguiu interpretar
+    let extraidos    = 0; // mensagens que o parser conseguiu interpretar (ou já deduplicadas)
+    let threadNovo   = false;
 
     for (const msg of thread.getMessages()) {
       const remetente = msg.getFrom();
@@ -342,41 +380,67 @@ function processarEmailsJudiciais() {
       const corpo = msg.getPlainBody() + msg.getBody();
       const dados = extrairDadosEmail_(corpo, remetente, msg.getDate());
       if (!dados) continue;
+
+      // Deduplicação por hash (número do processo + data + remetente + assunto + trecho)
+      const hash = _f2_computarHash_(dados, msg);
+      if (_f2_verificarDuplicata_(ss, hash)) {
+        totalDedup++;
+        extraidos++; // conta como "processado" p/ não enviar p/ revisão
+        Logger.log('[F2] Duplicata ignorada: ' + dados.numProcesso + ' hash=' + hash.substring(0, 16));
+        continue;
+      }
+
       extraidos++;
 
-      const resultado = aplicarNaPlanilha_(ss, dados);
-      if (resultado.novo)       totalNovos++;
-      if (resultado.atualizado) totalAtualizados++;
-      if (resultado.alerta)     alertasUrgentes.push(resultado.alerta);
+      const classif  = _f2_classificarMovimento_(dados.descMovimentacao);
+      dados._classif = classif;
+      dados._hash    = hash;
+
+      if (!dryRun) {
+        const resultado = aplicarNaPlanilha_(ss, dados);
+        if (resultado.novo)       { totalNovos++; threadNovo = true; }
+        if (resultado.atualizado)   totalAtualizados++;
+        if (resultado.alerta)       alertasUrgentes.push(resultado.alerta);
+        _f2_gravarAndamento_(ss, dados, msg, hash, classif, resultado.novo);
+      } else {
+        Logger.log('[TESTE] Seria gravado: ' + dados.numProcesso + ' | ' + classif
+          + ' | ' + dados.descMovimentacao.substring(0, 60) + '...');
+      }
     }
+
+    if (dryRun) continue; // modo teste: não altera labels do Gmail
 
     if (extraidos > 0) {
-      // Pelo menos uma movimentação foi interpretada e gravada.
       marcarComoProcessado_(thread);
+      if (threadNovo) triagemThreads.add(thread); // sinaliza triagem em paralelo
     } else if (reconhecidos > 0) {
-      // E-mail judicial que o parser NÃO conseguiu interpretar
-      // (ex.: o tribunal mudou o layout). NÃO marca como processado:
-      // sinaliza para revisão humana e avisa os sócios, evitando
-      // perda silenciosa de andamento/prazo.
+      // E-mail de remetente judicial reconhecido, mas parser não extraiu dados.
+      // NÃO marca como processado — etiqueta para revisão humana.
       marcarParaRevisar_(thread);
       paraRevisar.push(thread);
-      Logger.log('[REVISAR] Não foi possível extrair dados — ' + thread.getFirstMessageSubject());
+      Logger.log('[REVISAR] Parser não extraiu dados: ' + thread.getFirstMessageSubject());
     } else {
-      // Nada reconhecido nesta thread — marca como processado p/ não rescanear.
       marcarComoProcessado_(thread);
     }
   }
 
-  Logger.log(`Resultado: ${totalAtualizados} atualizados, ${totalNovos} novos processos, ${paraRevisar.length} p/ revisão`);
-  registrarLog('Andamento Processual: ' + totalAtualizados + ' atualizado(s), ' + totalNovos
-    + ' novo(s), ' + paraRevisar.length + ' p/ revisão.');
+  // Etiqueta threads com processos novos para triagem humana
+  triagemThreads.forEach(function(t) { _f2_marcarTriagem_(t); });
 
-  if (alertasUrgentes.length > 0) {
-    enviarAlertaEmail_(alertasUrgentes);
+  if (!dryRun) {
+    // Avança o cursor para a próxima execução incremental
+    props.setProperty(F2.PROP_LAST_RUN, agora.toISOString());
   }
-  if (paraRevisar.length > 0) {
-    enviarAvisoRevisao_(paraRevisar);
-  }
+
+  const resumo = (dryRun ? '[TESTE] ' : '') +
+    totalAtualizados + ' atualizado(s), ' + totalNovos + ' novo(s), ' +
+    totalDedup + ' dedup, ' + paraRevisar.length + ' p/ revisão, ' +
+    triagemThreads.size + ' triagem';
+  Logger.log('[F2] ' + resumo);
+  registrarLog('Andamento Processual: ' + resumo);
+
+  if (alertasUrgentes.length > 0) enviarAlertaEmail_(alertasUrgentes);
+  if (paraRevisar.length > 0)    enviarAvisoRevisao_(paraRevisar);
 }
 
 // ──────────────────────────────────────────────────────────
@@ -2870,9 +2934,16 @@ function _semearConfiguracoes_(ss) {
   aba.autoResizeColumns(1, 4);
 }
 
-function buildGmailQuery_() {
-  const from = CONFIG.remetentes.map(r => `from:${r}`).join(' OR ');
-  return `(${from}) newer_than:${CONFIG.diasRetroativos}d -label:${CONFIG.labelProcessado} -label:${CONFIG.labelRevisar}`;
+function buildGmailQuery_(desde) {
+  const from    = CONFIG.remetentes.map(r => 'from:' + r).join(' OR ');
+  const excluir = '-label:' + CONFIG.labelProcessado + ' -label:' + CONFIG.labelRevisar;
+  if (desde instanceof Date) {
+    const y = desde.getFullYear();
+    const m = String(desde.getMonth() + 1).padStart(2, '0');
+    const d = String(desde.getDate()).padStart(2, '0');
+    return '(' + from + ') after:' + y + '/' + m + '/' + d + ' ' + excluir;
+  }
+  return '(' + from + ') newer_than:' + CONFIG.diasRetroativos + 'd ' + excluir;
 }
 
 function garantirLabelProcessado_() {
@@ -3143,5 +3214,250 @@ function enviarAvisoRevisao_(threads) {
     registrarLog('Aviso de revisão enviado: ' + threads.length + ' e-mail(s) p/ ' + destinos);
   } catch (e) {
     registrarLog('ERRO enviarAvisoRevisao_: ' + e.message);
+  }
+}
+
+
+// ████████████████████████████████████████████████████████████
+// FASE 2 — INGESTÃO INTELIGENTE DE E-MAILS
+// Cursor incremental, dry-run, deduplicação por hash SHA-256,
+// classificação em 13 tipos e fila de triagem.
+// ████████████████████████████████████████████████████████████
+
+// ──────────────────────────────────────────────────────────
+// CONTROLE DE CURSOR E MODO DE EXECUÇÃO
+// ──────────────────────────────────────────────────────────
+
+function _f2_isDryRun_() {
+  return PropertiesService.getScriptProperties().getProperty(F2.PROP_DRY_RUN) === '1';
+}
+
+function alternarModoTeste() {
+  const props = PropertiesService.getScriptProperties();
+  const ativo = props.getProperty(F2.PROP_DRY_RUN) === '1';
+  if (ativo) {
+    props.deleteProperty(F2.PROP_DRY_RUN);
+    SpreadsheetApp.getUi().alert(
+      'Modo Teste DESATIVADO.\n' +
+      'A próxima execução de "Processar E-mails" voltará a gravar na planilha normalmente.'
+    );
+  } else {
+    props.setProperty(F2.PROP_DRY_RUN, '1');
+    SpreadsheetApp.getUi().alert(
+      'Modo Teste ATIVADO.\n' +
+      'A próxima execução de "Processar E-mails" apenas registrará no Log — ' +
+      'nenhuma alteração será feita na planilha nem no Gmail.'
+    );
+  }
+}
+
+function reprocessarEmailsPorPeriodo() {
+  const ui = SpreadsheetApp.getUi();
+  const resp = ui.prompt(
+    'Reprocessar por Período',
+    'Informe a data de início no formato DD/MM/AAAA (ex: 01/06/2026).\n' +
+    'Os e-mails a partir dessa data serão reprocessados.\n' +
+    'Andamentos já registrados na aba Andamentos (mesmo hash) serão ignorados automaticamente.',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (resp.getSelectedButton() !== ui.Button.OK) return;
+
+  const str = resp.getResponseText().trim();
+  const partes = str.split('/');
+  if (partes.length !== 3) {
+    ui.alert('Data inválida. Use o formato DD/MM/AAAA.');
+    return;
+  }
+  const desde = new Date(Number(partes[2]), Number(partes[1]) - 1, Number(partes[0]));
+  if (isNaN(desde.getTime())) {
+    ui.alert('Data inválida: ' + str);
+    return;
+  }
+
+  PropertiesService.getScriptProperties().setProperty(F2.PROP_LAST_RUN, desde.toISOString());
+  ui.alert('Cursor redefinido para ' + str + '.\nIniciando processamento...');
+  processarEmailsJudiciais();
+}
+
+// ──────────────────────────────────────────────────────────
+// HASH DE DEDUPLICAÇÃO
+// SHA-256 sobre número do processo + data + remetente + assunto + trecho.
+// Evita que o mesmo andamento seja gravado mais de uma vez (re-execuções,
+// reprocessamentos manuais, e-mails duplicados pelo tribunal).
+// ──────────────────────────────────────────────────────────
+
+function _f2_computarHash_(dados, msg) {
+  const entrada = [
+    normNum_(dados.numProcesso || ''),
+    dados.ultimaMovData
+      ? Utilities.formatDate(dados.ultimaMovData, 'America/Sao_Paulo', 'yyyyMMdd')
+      : '',
+    msg ? msg.getFrom()    : '',
+    msg ? msg.getSubject() : '',
+    (dados.descMovimentacao || '').substring(0, 120)
+  ].join('|');
+
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    entrada,
+    Utilities.Charset.UTF_8
+  );
+  return bytes.map(function(b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
+}
+
+function _f2_verificarDuplicata_(ss, hash) {
+  try {
+    const aba = resolverAba_(ss, SCHEMA.ANDAMENTOS.aliases);
+    if (!aba) return false; // aba Andamentos ainda não criada → não bloqueia
+
+    const dados     = aba.getDataRange().getValues();
+    const cabecalho = dados[0] || [];
+    const colHash   = cabecalho.indexOf('Hash de deduplicação');
+    if (colHash < 0) return false;
+
+    for (let r = 1; r < dados.length; r++) {
+      if (String(dados[r][colHash]).trim() === hash) return true;
+    }
+    return false;
+  } catch (e) {
+    Logger.log('[F2] _f2_verificarDuplicata_ erro: ' + e.message);
+    return false; // em caso de erro, não bloqueia o processamento
+  }
+}
+
+// ──────────────────────────────────────────────────────────
+// GRAVAR NA ABA ANDAMENTOS
+// Registra cada movimentação capturada com metadados completos.
+// Funciona mesmo que a aba Andamentos ainda não exista (falha silenciosa).
+// ──────────────────────────────────────────────────────────
+
+function _f2_gravarAndamento_(ss, dados, msg, hash, classif, ehNovo) {
+  try {
+    const aba = resolverAba_(ss, SCHEMA.ANDAMENTOS.aliases);
+    if (!aba) return;
+
+    const h = aba.getDataRange().getValues()[0] || [];
+    function col(nome) { return h.indexOf(nome); }
+
+    const linkEmail = msg ? 'https://mail.google.com/mail/u/0/#all/' + msg.getId() : '';
+    const agora     = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm');
+    const dataAnd   = dados.ultimaMovData
+      ? Utilities.formatDate(dados.ultimaMovData, 'America/Sao_Paulo', 'dd/MM/yyyy')
+      : agora;
+    const classifFinal = ehNovo ? 'triagem' : classif;
+
+    const nova = new Array(h.length).fill('');
+    function s(nome, val) { const i = col(nome); if (i >= 0) nova[i] = String(val || ''); }
+
+    s('ID interno',           'AND-' + new Date().getTime());
+    s('Processo vinculado',   dados.numProcesso  || '');
+    s('Data do andamento',    dataAnd);
+    s('Sistema de origem',    _f2_nomeSistema_(dados.tipo));
+    s('Resumo do andamento',  (dados.descMovimentacao || '').substring(0, 500));
+    s('Texto bruto',          ''); // corpo completo não gravado (excede limite de célula)
+    s('Link do e-mail',       linkEmail);
+    s('Hash de deduplicação', hash);
+    s('Classificação por IA', classifFinal);
+    s('Relevância',           _f2_relevancia_(classifFinal));
+    s('Ação sugerida',        _f2_acaoSugerida_(classifFinal));
+    s('Criado em',            agora);
+
+    aba.appendRow(nova);
+  } catch (e) {
+    Logger.log('[F2] _f2_gravarAndamento_ erro: ' + e.message);
+  }
+}
+
+function _f2_nomeSistema_(tipo) {
+  if (tipo === 'pje_push')        return 'PJe Push (TJRJ)';
+  if (tipo === 'eproc')           return 'EPROC (JFRJ/TRF2)';
+  if (tipo === 'recorte_digital') return 'Recorte Digital (OAB/RJ)';
+  return 'Desconhecido';
+}
+
+// ──────────────────────────────────────────────────────────
+// CLASSIFICAÇÃO DE MOVIMENTAÇÕES (13 TIPOS)
+// Heurística por palavras-chave após normalizar acentos.
+// A IA (Fase 4) pode sobrescrever em segundo passo se necessário.
+// ──────────────────────────────────────────────────────────
+
+function _f2_classificarMovimento_(desc) {
+  if (!desc) return F2.TIPOS.ANDAMENTO;
+  const d = desc.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  if (/\b(audiencia|sessao de julgamento|julgamento oral|designad[ao] audiencia)\b/.test(d))
+    return F2.TIPOS.AUDIENCIA;
+  if (/\b(sentenca|julgad[ao]|procedente|improcedente|extint[ao]|homo[lo]+gad[ao])\b/.test(d))
+    return F2.TIPOS.SENTENCA;
+  if (/\b(decisao|decidi[do]|deferi[do]|indeferi[do]|negad[ao] seguimento)\b/.test(d))
+    return F2.TIPOS.DECISAO;
+  if (/\b(prazo fatal|prazo processual|data limite|\d+ dias? uteis?|\d+ dias? para)\b/.test(d))
+    return F2.TIPOS.PRAZO;
+  if (/\b(intima[cç][ao]|intimad[ao]|citac[ao]|citad[ao]|mandado de citacao)\b/.test(d))
+    return F2.TIPOS.INTIMACAO;
+  if (/\b(publicac[ao]|dje|diario da justica|publicad[ao]|disponibilizac[ao])\b/.test(d))
+    return F2.TIPOS.PUBLICACAO;
+  if (/\b(despacho|determino|determine|vista ao|vistas ao|abra-se vista)\b/.test(d))
+    return F2.TIPOS.DESPACHO;
+  if (/\b(juntad[ao]|peticao juntada|documento juntad[ao]|juntada de)\b/.test(d))
+    return F2.TIPOS.JUNTADA;
+  if (/\b(certidao|certifico|certifica[cç][ao])\b/.test(d))
+    return F2.TIPOS.CERTIDAO;
+  if (/\b(ato ordinatorio|ordinatorio|secretaria expediu|secretaria informa)\b/.test(d))
+    return F2.TIPOS.ATO_ORDINATORIO;
+  if (/\b(comunicacao administrativa|cancelamento|suspensao do processo|arquivamento)\b/.test(d))
+    return F2.TIPOS.COM_ADMINISTRATIVA;
+  if (/\b(recibo de protocolo|confirmacao de recebimento|lembrete automatico)\b/.test(d))
+    return F2.TIPOS.IRRELEVANTE;
+  return F2.TIPOS.ANDAMENTO;
+}
+
+function _f2_relevancia_(classif) {
+  const alta  = [F2.TIPOS.SENTENCA, F2.TIPOS.PRAZO, F2.TIPOS.INTIMACAO, F2.TIPOS.AUDIENCIA];
+  const media = [F2.TIPOS.DECISAO, F2.TIPOS.PUBLICACAO, F2.TIPOS.DESPACHO];
+  if (alta.indexOf(classif)  >= 0) return '🔴 Alta';
+  if (media.indexOf(classif) >= 0) return '🟡 Média';
+  if (classif === F2.TIPOS.IRRELEVANTE) return '⚪ Baixa';
+  if (classif === 'triagem') return '🔵 Triagem';
+  return '🟢 Normal';
+}
+
+function _f2_acaoSugerida_(classif) {
+  const acoes = {
+    sentenca:          'Revisar decisão e comunicar cliente — avaliar recurso',
+    prazo:             'Verificar data limite e providenciar peça ou manifestação',
+    intimacao:         'Verificar conteúdo da intimação no sistema de origem',
+    audiencia:         'Confirmar data/hora no sistema e preparar cliente',
+    decisao:           'Analisar decisão e verificar necessidade de manifestação',
+    publicacao:        'Conferir texto publicado no diário e contar prazos',
+    despacho:          'Cumprir determinação do despacho no prazo',
+    juntada:           'Verificar documento juntado e tomar providências',
+    certidao:          'Conferir certidão emitida',
+    ato_ordinatorio:   'Verificar ato da secretaria',
+    com_administrativa:'Verificar comunicação administrativa',
+    irrelevante:       '',
+    andamento:         'Verificar andamento no sistema de origem',
+    triagem:           'PROCESSO NOVO — vincular ao cliente correto antes de prosseguir'
+  };
+  return acoes[classif] || '';
+}
+
+// ──────────────────────────────────────────────────────────
+// TRIAGEM — label Gmail para processos novos (sem cliente vinculado)
+// ──────────────────────────────────────────────────────────
+
+function _f2_garantirLabelTriagem_() {
+  try {
+    GmailApp.getUserLabelByName(F2.LABEL_TRIAGEM) ||
+    GmailApp.createLabel(F2.LABEL_TRIAGEM);
+  } catch (e) {}
+}
+
+function _f2_marcarTriagem_(thread) {
+  try {
+    const label = GmailApp.getUserLabelByName(F2.LABEL_TRIAGEM);
+    if (label) thread.addLabel(label);
+  } catch (e) {
+    Logger.log('[F2] _f2_marcarTriagem_ erro: ' + e.message);
   }
 }

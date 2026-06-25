@@ -59,6 +59,27 @@ pastas, prazos, backup, migração, log), **Fase 2** (Procuração/Contrato),
   `Erros`; trilha em `Auditoria`; ler parâmetros de `Configurações`. Hoje as
   abas existem e estão prontas, mas a automação ainda não escreve nelas.
 
+## ✅ Implementado — FASE 2 (Ingestão Inteligente de E-mails)
+
+| Item | O que mudou |
+|------|-------------|
+| Cursor incremental | `processarEmailsJudiciais` lê `EMAIL_LAST_RUN` do `PropertiesService`. Só busca e-mails recebidos após a última execução bem-sucedida; na primeira execução usa a janela `CONFIG.diasRetroativos` como fallback. Ao final de cada run bem-sucedido atualiza o cursor. |
+| `buildGmailQuery_(desde)` | Aceita cursor `Date` opcional; se presente usa `after:AAAA/MM/DD`; caso contrário usa `newer_than:Xd`. |
+| Dry-run / Modo Teste | `alternarModoTeste()` (menu) grava `EMAIL_DRY_RUN=1` no `PropertiesService`. Enquanto ativo, o processamento registra no Log o que seria gravado, mas não altera planilha nem labels do Gmail. |
+| Reprocessar por período | `reprocessarEmailsPorPeriodo()` (menu) pede data em DD/MM/AAAA, redefine o cursor e dispara `processarEmailsJudiciais`. Andamentos já registrados (mesmo hash) são ignorados automaticamente. |
+| Hash SHA-256 | `_f2_computarHash_` usa `Utilities.computeDigest(SHA_256, ...)` sobre `número + data + remetente + assunto + trecho`. Antes de qualquer escrita, `_f2_verificarDuplicata_` consulta a coluna "Hash de deduplicação" na aba `Andamentos`. |
+| Aba Andamentos | `_f2_gravarAndamento_` escreve na aba `Andamentos` (criada na FASE 1): ID, processo, data, sistema de origem, resumo, link do e-mail, hash, classificação, relevância, ação sugerida, criado em. |
+| Classificação em 13 tipos | `_f2_classificarMovimento_` classifica por palavras-chave (normalizado NFD): `andamento`, `intimacao`, `prazo`, `publicacao`, `audiencia`, `sentenca`, `decisao`, `despacho`, `juntada`, `certidao`, `ato_ordinatorio`, `com_administrativa`, `irrelevante`. |
+| Relevância e ação sugerida | Alta (sentença/prazo/intimação/audiência) · Média (decisão/publicação/despacho) · Normal · Baixa · Triagem. Ação sugerida correspondente a cada tipo. |
+| Triagem de processos novos | Quando `resultado.novo === true`, grava na aba `Andamentos` com classificação `triagem` e adiciona a label Gmail `PJe-Triagem` à thread, para revisão humana antes de vincular ao cliente. |
+| Novos labels Gmail | `PJe-Triagem` criado automaticamente em paralelo com `PJe-Processado` e `PJe-Revisar`. |
+| Menu | Dois novos itens em `📨 Andamento Processual`: **Reprocessar por Período** e **Ativar / Desativar Modo Teste**. |
+
+### Decisões de segurança da FASE 2
+- A aba `Andamentos` deve ser criada antes via `🧱 Estrutura de Dados → Criar Abas Novas`. Se não existir, `_f2_gravarAndamento_` e `_f2_verificarDuplicata_` falham silenciosamente — o processamento principal continua sem interrupção.
+- `inserirNovoProcesso_` ainda insere o processo na aba `Processos` com cliente "A identificar" (comportamento atual preservado). A label `PJe-Triagem` + registro na aba `Andamentos` são camadas adicionais de rastreabilidade, não substitutos.
+- A IA (FASE 4) não é chamada durante o processamento de e-mails — classificação é só por palavras-chave; humano revisa.
+
 ## 🔜 Estrutural — próxima fase (a aprovar)
 
 - **R4 — IA em lote sem estourar 6 min**: `analisarTodosProcessos` deve
