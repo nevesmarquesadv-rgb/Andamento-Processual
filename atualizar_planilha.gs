@@ -359,6 +359,8 @@ function onOpen() {
       .addSeparator()
       .addItem('🏥 Health Check',                           'healthCheck')
       .addSeparator()
+      .addItem('🔧 Aplicar Correções Fresh Start',           'corrigirDadosFreshStart')
+      .addSeparator()
       .addSubMenu(ui.createMenu('🧪 Testes & Validação')
         .addItem('▶ Executar Suite Completa (15 testes)',   'executarSuiteDeTestes')
         .addSeparator()
@@ -6260,4 +6262,212 @@ function executarSuiteDeTestes() {
   registrarLog('[T11 SUITE] Concluída: passou=' + passou + ' falhou=' + falhou + ' pulado=' + pulado);
   ui.alert('🧪 Resultado da Suite', msg.substring(0, 2000)
     + (msg.length > 2000 ? '\n\n…[ver 🔧 Log para detalhes completos]' : ''), ui.ButtonSet.OK);
+}
+
+
+// ============================================================
+// FRESH START — Aplicar correções identificadas via leitura dos
+// inteiros teores dos processos (pasta Google Drive)
+// ============================================================
+
+function corrigirDadosFreshStart() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = getPlanilha_();
+
+  // ── Aba Processos ────────────────────────────────────────────
+  var abaProc = resolverAba_(ss, ['Processos', 'Processo']);
+  if (!abaProc) {
+    ui.alert('Erro', 'Aba "Processos" não encontrada.', ui.ButtonSet.OK);
+    return;
+  }
+  var dadosProc = abaProc.getDataRange().getValues();
+  var cabProc = encontrarCabecalho_(dadosProc, 'Nº Processo');
+  if (!cabProc) {
+    ui.alert('Erro', 'Cabeçalho "Nº Processo" não encontrado na aba Processos.', ui.ButtonSet.OK);
+    return;
+  }
+  var cabRowProc = cabProc.cabRow;
+  var headersProc = cabProc.headers;
+
+  // ── Aba Agenda ───────────────────────────────────────────────
+  var abaAgenda = resolverAba_(ss, ['Agenda']);
+  var dadosAgenda, cabRowAgenda, headersAgenda;
+  if (abaAgenda) {
+    dadosAgenda = abaAgenda.getDataRange().getValues();
+    var cabA = encontrarCabecalho_(dadosAgenda, 'Data');
+    if (cabA) { cabRowAgenda = cabA.cabRow; headersAgenda = cabA.headers; }
+  }
+
+  // Localiza linha (0-based em dadosProc) por número de processo
+  // Usa startsWith para suportar busca por prefixo (ex: "0805757" encontra "0805757-55...")
+  function findProcRow(numProc, clienteFilter) {
+    var norm = normNum_(numProc);
+    for (var r = cabRowProc + 1; r < dadosProc.length; r++) {
+      var cellNorm = normNum_(String(dadosProc[r][0]));
+      if (cellNorm !== norm && !cellNorm.startsWith(norm)) continue;
+      if (clienteFilter) {
+        var iCli = headersProc.indexOf('Cliente');
+        var cliVal = iCli >= 0 ? String(dadosProc[r][iCli]).toLowerCase() : '';
+        if (cliVal.indexOf(clienteFilter.toLowerCase()) < 0) continue;
+      }
+      return r;
+    }
+    return -1;
+  }
+
+  function findAllProcRows(numProc) {
+    var norm = normNum_(numProc);
+    var rows = [];
+    for (var r = cabRowProc + 1; r < dadosProc.length; r++) {
+      var cellNorm = normNum_(String(dadosProc[r][0]));
+      if (cellNorm === norm || cellNorm.startsWith(norm)) rows.push(r);
+    }
+    return rows;
+  }
+
+  function colIdx(name) { return headersProc.indexOf(name); }
+
+  // ── Preview ──────────────────────────────────────────────────
+  var preview = [
+    '12 divergências identificadas nos inteiros teores:',
+    '',
+    '01. 5026538 → ID: CLI-011 → CLI-010',
+    '02. 0817084 → Fase: Citação Pendente → Embargos de Declaração',
+    '    0817084 → Últ. Mov.: 24/06/2026 → 19/06/2026',
+    '    0817084 → Desc.: Sentença proferida — Embargos de Declaração juntados em 15/06/2026',
+    '03. 0812492 → Fase: Contestação → Cumprimento de Sentença',
+    '    0812492 → Últ. Mov.: 24/06/2026 → 22/06/2026',
+    '04. 0805757 (Guilherme) → Últ. Mov.: 31/03/2027 → 31/03/2026',
+    '05. 0821883 → Tribunal/Órgão: → Erica Batista de Castro',
+    '06. 5002648 → Fase: Execução → Execução — Aguarda Pagamento',
+    '    5002648 → Últ. Mov.: 03/04/2025 → 24/04/2025',
+    '07. 0862248 → Fase: Sentença — Improcedente → Embargos de Declaração',
+    '08. 3010493 → Últ. Mov.: 27/01/2026 → 25/05/2026',
+    '    3010493 → Desc.: Juntada de complementação de custas processuais',
+    '09. 0860817 → Últ. Mov.: 19/10/2025 → 07/04/2026',
+    '    0860817 → Desc.: Migração do processo para outro sistema eletrônico',
+    '10. 5015152 → Fase: Petição Inicial → Instrução',
+    '    5015152 → Últ. Mov.: 26/02/2026 → 12/05/2026',
+    '11. 5008994 → Últ. Mov.: 07/10/2025 → 24/03/2026',
+    '    5008994 → Desc.: Contestação juntada',
+    '12. 0805757 (ambas linhas) → Fase → Citação — Pendente (Luciano Quinellato)',
+    '+ Agenda: Vitor 07/07/2026 → Status: Suspenso — aguardar julgamento dos embargos',
+    '',
+    'Deseja aplicar todas as correções agora?'
+  ].join('\n');
+
+  var resp = ui.alert('🔧 Fresh Start — Confirmar Correções', preview, ui.ButtonSet.YES_NO);
+  if (resp !== ui.Button.YES) {
+    ui.alert('Cancelado', 'Nenhuma alteração foi realizada.', ui.ButtonSet.OK);
+    return;
+  }
+
+  // ── Aplicar ──────────────────────────────────────────────────
+  var aplicadas = 0;
+  var avisos = [];
+
+  function aplicarCampo(rowIdx0, campo, novoValor, label) {
+    var c = colIdx(campo);
+    if (c < 0) { avisos.push('Coluna não encontrada: ' + campo); return; }
+    if (rowIdx0 < 0) { avisos.push('Processo não encontrado: ' + label); return; }
+    var oldVal = dadosProc[rowIdx0][c];
+    abaProc.getRange(rowIdx0 + 1, c + 1).setValue(novoValor);
+    registrarLog('[FRESH START] ' + label + ' | ' + campo + ': "' + oldVal + '" → "' + novoValor + '"');
+    aplicadas++;
+  }
+
+  // 01 — 5026538: ID CLI-011 → CLI-010
+  aplicarCampo(findProcRow('5026538-50.2026.4.02.5101'), 'ID', 'CLI-010', '5026538');
+
+  // 02 — 0817084: Fase, Últ. Mov., Desc.
+  var r02 = findProcRow('0817084-51.2026.8.19.0038');
+  aplicarCampo(r02, 'Fase',                    'Embargos de Declaração',                                          '0817084');
+  aplicarCampo(r02, 'Últ. Mov.',               new Date(2026, 5, 19),                                            '0817084');
+  aplicarCampo(r02, 'Desc. Últ. Movimentação', 'Sentença proferida — Embargos de Declaração juntados em 15/06/2026', '0817084');
+
+  // 03 — 0812492: Fase, Últ. Mov.
+  var r03 = findProcRow('0812492-61.2026.8.19.0038');
+  aplicarCampo(r03, 'Fase',       'Cumprimento de Sentença', '0812492');
+  aplicarCampo(r03, 'Últ. Mov.',  new Date(2026, 5, 22),     '0812492');
+
+  // 04 — 0805757 (linha Guilherme): Últ. Mov. 31/03/2027 → 31/03/2026
+  aplicarCampo(findProcRow('0805757', 'guilherme'), 'Últ. Mov.', new Date(2026, 2, 31), '0805757-Guilherme');
+
+  // 05 — 0821883: Tribunal / Órgão → Erica Batista de Castro
+  aplicarCampo(findProcRow('0821883-80.2024.8.19.0209'), 'Tribunal / Órgão', 'Erica Batista de Castro', '0821883');
+
+  // 06 — 5002648: Fase, Últ. Mov.
+  var r06 = findProcRow('5002648-59.2025.4.02.5120');
+  aplicarCampo(r06, 'Fase',      'Execução — Aguarda Pagamento', '5002648');
+  aplicarCampo(r06, 'Últ. Mov.', new Date(2025, 3, 24),          '5002648');
+
+  // 07 — 0862248: Fase
+  aplicarCampo(findProcRow('0862248-73.2025.8.19.0038'), 'Fase', 'Embargos de Declaração', '0862248');
+
+  // 08 — 3010493: Últ. Mov., Desc.
+  var r08 = findProcRow('3010493-69.2026.8.19.0001');
+  aplicarCampo(r08, 'Últ. Mov.',               new Date(2026, 4, 25),                             '3010493');
+  aplicarCampo(r08, 'Desc. Últ. Movimentação', 'Juntada de complementação de custas processuais', '3010493');
+
+  // 09 — 0860817: Últ. Mov., Desc.
+  var r09 = findProcRow('0860817-04.2025.8.19.0038');
+  aplicarCampo(r09, 'Últ. Mov.',               new Date(2026, 3, 7),                                     '0860817');
+  aplicarCampo(r09, 'Desc. Últ. Movimentação', 'Migração do processo para outro sistema eletrônico',     '0860817');
+
+  // 10 — 5015152: Fase, Últ. Mov.
+  var r10 = findProcRow('5015152-23.2026.4.02.5101');
+  aplicarCampo(r10, 'Fase',      'Instrução',           '5015152');
+  aplicarCampo(r10, 'Últ. Mov.', new Date(2026, 4, 12), '5015152');
+
+  // 11 — 5008994: Últ. Mov., Desc. (Fase permanece "Instrução" — sem alteração)
+  var r11 = findProcRow('5008994-26.2025.4.02.5120');
+  aplicarCampo(r11, 'Últ. Mov.',               new Date(2026, 2, 24),  '5008994');
+  aplicarCampo(r11, 'Desc. Últ. Movimentação', 'Contestação juntada',  '5008994');
+
+  // 12 — 0805757 (ambas linhas): Fase → Citação — Pendente (Luciano Quinellato)
+  var rows12 = findAllProcRows('0805757');
+  if (rows12.length === 0) {
+    avisos.push('Processo 0805757 não encontrado para correção 12.');
+  } else {
+    rows12.forEach(function(r) {
+      var c = colIdx('Fase');
+      if (c >= 0) {
+        var oldVal = dadosProc[r][c];
+        abaProc.getRange(r + 1, c + 1).setValue('Citação — Pendente (Luciano Quinellato)');
+        registrarLog('[FRESH START] 0805757 | Fase: "' + oldVal + '" → "Citação — Pendente (Luciano Quinellato)"');
+        aplicadas++;
+      }
+    });
+  }
+
+  // ── Agenda: Vitor (07/07/2026) → Status suspenso ─────────────
+  if (abaAgenda && headersAgenda) {
+    var iStatusA = headersAgenda.indexOf('Status');
+    var iDescA   = headersAgenda.indexOf('Descrição');
+    var iDataA   = headersAgenda.indexOf('Data');
+    var iCliA    = headersAgenda.indexOf('Cliente');
+    var alvoTs   = new Date(2026, 6, 7).getTime();
+    for (var ra = cabRowAgenda + 1; ra < dadosAgenda.length; ra++) {
+      var dataCell = dadosAgenda[ra][iDataA >= 0 ? iDataA : 0];
+      if (!dataCell) continue;
+      var dt = dataCell instanceof Date ? dataCell : new Date(dataCell);
+      if (isNaN(dt.getTime()) || dt.getTime() !== alvoTs) continue;
+      var descV = iDescA >= 0 ? String(dadosAgenda[ra][iDescA]).toLowerCase() : '';
+      var cliV  = iCliA  >= 0 ? String(dadosAgenda[ra][iCliA]).toLowerCase()  : '';
+      if (descV.indexOf('vitor') >= 0 || cliV.indexOf('vitor') >= 0 || descV.indexOf('embargo') >= 0) {
+        if (iStatusA >= 0) {
+          abaAgenda.getRange(ra + 1, iStatusA + 1).setValue('Suspenso — aguardar julgamento dos embargos');
+          registrarLog('[FRESH START] Agenda 07/07/2026 Vitor → Status: Suspenso — aguardar julgamento dos embargos');
+          aplicadas++;
+        }
+        break;
+      }
+    }
+  }
+
+  // ── Resumo ────────────────────────────────────────────────────
+  registrarLog('[FRESH START] Concluído: ' + aplicadas + ' campos atualizados.');
+  var resumo = '✅ ' + aplicadas + ' campo(s) atualizado(s) com sucesso.\n\nVerifique a aba Log / Auditoria para detalhes.';
+  if (avisos.length > 0) resumo += '\n\n⚠️ Avisos:\n' + avisos.join('\n');
+  ui.alert('🔧 Fresh Start — Concluído', resumo, ui.ButtonSet.OK);
 }
