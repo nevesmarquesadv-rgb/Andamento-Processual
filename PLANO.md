@@ -98,6 +98,70 @@ pastas, prazos, backup, migração, log), **Fase 2** (Procuração/Contrato),
 - KPIs do Dashboard usam `best-effort`: se a aba Dashboard não existir, `atualizarKPIs()` continua sem erro (bloco `if (dash)`).
 - Nenhuma alteração foi feita nas abas existentes (Clientes, Processos, Agenda, Financeiro) automaticamente.
 
+## ✅ Implementado — FASE 4 (Documentos Automáticos)
+
+| Item | O que mudou |
+|------|-------------|
+| 5 tipos de documento | `gerarProcuracao`, `gerarContrato` (existentes, preservados), `gerarHipossuficiencia`, `gerarSubstabelecimento`, `gerarPeticaoSimples` — todos chamam `_gerarDocumento(tipo, dadosExtras)`. |
+| `gerarSubstabelecimento()` | Prompts para nome e OAB do advogado substabelecido antes de chamar `_gerarDocumento`. |
+| `gerarPeticaoSimples()` | Prompts para número do processo, tribunal/órgão, descrição do pedido. |
+| Verificação de template | `_gerarDocumento` rejeita com aviso claro se o ID do template começa com `PREENCHA_`. |
+| Validação de campos | `_f4doc_validarCampos_` verifica obrigatórios por tipo antes de gerar. Para SUBSTABELECIMENTO: nome + CPF + advSubstabelecido + oabSubstabelecido. Para PETICAO_SIMPLES: nome + CPF + descricaoPedido. |
+| Proteção contra sobrescrita | `_f4doc_verificarExistente_` consulta a pasta por nome antes de copiar. Se existir, exige confirmação YES_NO antes de criar nova cópia. |
+| Destino no Drive | Procuração e Contrato → `📋 Contratos e Procurações`. Hipossuficiência, Substabelecimento, Petição → `⚖️ Peças Processuais`. |
+| Aba Documentos | `_f4doc_gravarDocumentos_` appenda linha na aba `Documentos` (ID, cliente, processo, tipo, nome do arquivo, URL Drive, template, status, data de criação). |
+| Aba Auditoria | `_f4doc_registrarAuditoria_` appenda linha (timestamp, usuário, função, entidade, resultado, UUID de correlação). |
+| Exportação PDF | `_f4doc_ofertarPDF_` pergunta se deseja gerar PDF após criação do Docs; `_f4doc_exportarPDF_` usa `UrlFetchApp` + `export?format=pdf` com `OAuth Bearer` e salva na mesma pasta. |
+| Novos marcadores | `_substituirMarcadores` ganhou: `{{NASCIMENTO_CLIENTE}}`, `{{ADV_SUBSTABELECIDO}}`, `{{OAB_SUBSTABELECIDO}}`, `{{NR_PROCESSO}}`, `{{TRIBUNAL_ORGAO}}`, `{{DESCRICAO_PEDIDO}}`. |
+| Rascunho por e-mail | `enviarDocumentoComoRascunho()` (menu `📄 → 📤 Criar Rascunho`): prompts para URL do Drive, destinatário, assunto e corpo; exporta PDF via `UrlFetchApp`; chama `GmailApp.createDraft()` com PDF em anexo. **Nunca usa `sendEmail()`.** |
+
+### Templates a configurar (substituir IDs no código)
+```javascript
+const TEMPLATES = {
+  PROCURACAO:        '1mbJaKfa4RXyAcmuUbxGv0ggh6mJWQfmELMPi3xvaa6g',  // ✅ configurado
+  CONTRATO:          '1YBDCYEcvg-F6Tao9qWGriQxBTkA8HVKSvOYZiwslpSA',  // ✅ configurado
+  HIPOSSUFICIENCIA:  'PREENCHA_ID_TEMPLATE_HIPOSSUFICIENCIA',           // ⚙️ pendente
+  SUBSTABELECIMENTO: 'PREENCHA_ID_TEMPLATE_SUBSTABELECIMENTO',          // ⚙️ pendente
+  PETICAO_SIMPLES:   'PREENCHA_ID_TEMPLATE_PETICAO_SIMPLES'             // ⚙️ pendente
+};
+```
+
+### Marcadores disponíveis nos templates Google Docs
+| Marcador | Fonte |
+|---|---|
+| `{{NOME_CLIENTE}}` | Coluna B da aba Clientes |
+| `{{CPF_CLIENTE}}` | Coluna C |
+| `{{NASCIMENTO_CLIENTE}}` | Coluna D |
+| `{{ENDERECO_CLIENTE}}` | Coluna E |
+| `{{TELEFONE_CLIENTE}}` | Coluna F |
+| `{{EMAIL_CLIENTE}}` | Coluna G |
+| `{{AREA_DIREITO}}` | Coluna I |
+| `{{NR_CONTRATO}}` / `{{NR_PROCESSO}}` | Coluna J |
+| `{{TIPO_HONORARIO}}` | Coluna L |
+| `{{VALOR_HONORARIO}}` | Coluna M |
+| `{{FORMA_PAGAMENTO}}` | Coluna N |
+| `{{ADVOGADO_RESPONSAVEL}}` | Coluna P |
+| `{{OAB_ADVOGADO}}` | Inferido de Responsável (Luiz=253.413 / Kariny=241.456) |
+| `{{DESCRICAO_CAUSA}}` | Inferido de Área + Obs |
+| `{{ESTADO_CIVIL}}` | Extraído de Obs |
+| `{{PROFISSAO}}` | Extraído de Obs |
+| `{{RG_CLIENTE}}` | Extraído de Obs |
+| `{{ADV_SUBSTABELECIDO}}` | Prompt do usuário |
+| `{{OAB_SUBSTABELECIDO}}` | Prompt do usuário |
+| `{{TRIBUNAL_ORGAO}}` | Prompt do usuário (fallback: Comarca) |
+| `{{DESCRICAO_PEDIDO}}` | Prompt do usuário |
+| `{{CIDADE}}` | Extraído de Endereço (fallback: Nova Iguaçu) |
+| `{{COMARCA_FORO}}` | `ESCRITORIO.COMARCA` |
+| `{{ENDERECO_ESCRITORIO}}` | `ESCRITORIO.ENDERECO` |
+| `{{DATA_EXTENSO}}` | Data atual por extenso |
+| `{{DATA_GERACAO}}` | Data e hora da geração |
+
+### Decisões de segurança da FASE 4
+- Rascunho nunca enviado: toda comunicação por e-mail usa `GmailApp.createDraft()`, nunca `sendEmail()`. O alerta final lembra o usuário de revisar antes de enviar.
+- Não sobrescreve silenciosamente: se arquivo com mesmo nome já existe na pasta, exige confirmação YES/NO antes de criar nova cópia.
+- Aba Documentos e Auditoria: escritas via `appendRow` — nenhuma linha existente é alterada.
+- Abas existentes (Clientes, Processos, Agenda, Financeiro) não são modificadas.
+
 ## 🔜 Estrutural — próxima fase (a aprovar)
 
 - **R4 — IA em lote sem estourar 6 min**: `analisarTodosProcessos` deve

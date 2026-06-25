@@ -132,8 +132,12 @@ const F4 = {
 
 // --- Fase 2 (geração de documentos) ---
 const TEMPLATES = {
-  PROCURACAO : '1mbJaKfa4RXyAcmuUbxGv0ggh6mJWQfmELMPi3xvaa6g',
-  CONTRATO   : '1YBDCYEcvg-F6Tao9qWGriQxBTkA8HVKSvOYZiwslpSA'
+  PROCURACAO        : '1mbJaKfa4RXyAcmuUbxGv0ggh6mJWQfmELMPi3xvaa6g',
+  CONTRATO          : '1YBDCYEcvg-F6Tao9qWGriQxBTkA8HVKSvOYZiwslpSA',
+  // Crie cada modelo no Google Docs, substitua o ID abaixo pelo ID real:
+  HIPOSSUFICIENCIA  : 'PREENCHA_ID_TEMPLATE_HIPOSSUFICIENCIA',
+  SUBSTABELECIMENTO : 'PREENCHA_ID_TEMPLATE_SUBSTABELECIMENTO',
+  PETICAO_SIMPLES   : 'PREENCHA_ID_TEMPLATE_PETICAO_SIMPLES'
 };
 
 const ESCRITORIO = {
@@ -300,8 +304,13 @@ function onOpen() {
     .addSeparator()
 
     .addSubMenu(ui.createMenu('📄 Documentos')
-      .addItem('📜 Gerar Procuração (linha atual)', 'gerarProcuracao')
-      .addItem('📋 Gerar Contrato (linha atual)',   'gerarContrato'))
+      .addItem('📜 Gerar Procuração',                       'gerarProcuracao')
+      .addItem('📋 Gerar Contrato de Honorários',           'gerarContrato')
+      .addItem('🙋 Declaração de Hipossuficiência',         'gerarHipossuficiencia')
+      .addItem('📝 Substabelecimento',                      'gerarSubstabelecimento')
+      .addItem('⚖️ Petição Simples (a partir de modelo)',   'gerarPeticaoSimples')
+      .addSeparator()
+      .addItem('📤 Criar Rascunho de E-mail com Documento', 'enviarDocumentoComoRascunho'))
 
     .addSeparator()
 
@@ -1376,10 +1385,73 @@ function gerarContrato() {
   _gerarDocumento('CONTRATO');
 }
 
-function _gerarDocumento(tipo) {
+function gerarHipossuficiencia() {
+  _gerarDocumento('HIPOSSUFICIENCIA');
+}
+
+function gerarSubstabelecimento() {
+  const ui = SpreadsheetApp.getUi();
+  const r1 = ui.prompt('Substabelecimento — Advogado substabelecido',
+    'Digite o nome completo do advogado que receberá os poderes:', ui.ButtonSet.OK_CANCEL);
+  if (r1.getSelectedButton() !== ui.Button.OK) return;
+  const advSubstabelecido = r1.getResponseText().trim();
+  if (!advSubstabelecido) {
+    ui.alert('⚠️ Campo obrigatório', 'O nome do advogado substabelecido não pode ficar em branco.', ui.ButtonSet.OK);
+    return;
+  }
+  const r2 = ui.prompt('Substabelecimento — OAB do substabelecido',
+    'Digite o número OAB (ex: OAB/RJ nº 123.456):', ui.ButtonSet.OK_CANCEL);
+  if (r2.getSelectedButton() !== ui.Button.OK) return;
+  const oabSubstabelecido = r2.getResponseText().trim();
+  if (!oabSubstabelecido) {
+    ui.alert('⚠️ Campo obrigatório', 'O número OAB do substabelecido não pode ficar em branco.', ui.ButtonSet.OK);
+    return;
+  }
+  _gerarDocumento('SUBSTABELECIMENTO', { advSubstabelecido: advSubstabelecido, oabSubstabelecido: oabSubstabelecido });
+}
+
+function gerarPeticaoSimples() {
+  const ui = SpreadsheetApp.getUi();
+  const r1 = ui.prompt('Petição Simples — Número do processo',
+    'Digite o número do processo (CNJ ou deixe em branco se não vinculado):', ui.ButtonSet.OK_CANCEL);
+  if (r1.getSelectedButton() !== ui.Button.OK) return;
+  const nrProcesso = r1.getResponseText().trim();
+
+  const r2 = ui.prompt('Petição Simples — Tribunal / Órgão',
+    'Tribunal ou órgão destinatário (ex: TJRJ, JFRJ, INSS):', ui.ButtonSet.OK_CANCEL);
+  if (r2.getSelectedButton() !== ui.Button.OK) return;
+  const tribunalOrgao = r2.getResponseText().trim() || ESCRITORIO.COMARCA;
+
+  const r3 = ui.prompt('Petição Simples — Descrição do pedido',
+    'Descreva brevemente o objeto da petição:', ui.ButtonSet.OK_CANCEL);
+  if (r3.getSelectedButton() !== ui.Button.OK) return;
+  const descricaoPedido = r3.getResponseText().trim();
+  if (!descricaoPedido) {
+    ui.alert('⚠️ Campo obrigatório', 'A descrição do pedido não pode ficar em branco.', ui.ButtonSet.OK);
+    return;
+  }
+  _gerarDocumento('PETICAO_SIMPLES', {
+    nrProcesso: nrProcesso,
+    tribunalOrgao: tribunalOrgao,
+    descricaoPedido: descricaoPedido
+  });
+}
+
+function _gerarDocumento(tipo, dadosExtras) {
   const ui = SpreadsheetApp.getUi();
 
   try {
+    // Verifica se o template foi configurado
+    const templateId = TEMPLATES[tipo];
+    if (!templateId || templateId.indexOf('PREENCHA_') === 0) {
+      ui.alert('⚙️ Template não configurado',
+        'O template para "' + _f4doc_nomeDisplay_(tipo) + '" ainda não foi configurado.\n\n'
+        + 'Abra o arquivo atualizar_planilha.gs e substitua o valor de TEMPLATES.' + tipo
+        + ' pelo ID real do seu documento Google Docs modelo.',
+        ui.ButtonSet.OK);
+      return;
+    }
+
     const ss  = SpreadsheetApp.getActiveSpreadsheet();
     const aba = ss.getActiveSheet();
 
@@ -1399,8 +1471,12 @@ function _gerarDocumento(tipo) {
       return;
     }
 
-    // Lê e parseia os dados do cliente
+    // Lê dados do cliente e mescla campos extras fornecidos pelo caller
     const dados = _lerDadosCliente(aba, row);
+    if (dadosExtras) {
+      const chaves = Object.keys(dadosExtras);
+      for (let i = 0; i < chaves.length; i++) dados[chaves[i]] = dadosExtras[chaves[i]];
+    }
 
     if (!dados.nome) {
       ui.alert('⚠️ Cliente não identificado',
@@ -1409,45 +1485,66 @@ function _gerarDocumento(tipo) {
       return;
     }
 
-    // Confirma a ação com o usuário
-    const nomeTipo = tipo === 'PROCURACAO' ? 'Procuração Ad Judicia' : 'Contrato de Honorários';
+    // Valida campos obrigatórios para o tipo de documento
+    const erros = _f4doc_validarCampos_(dados, tipo);
+    if (erros.length) {
+      ui.alert('⚠️ Campos obrigatórios incompletos',
+        'Não foi possível gerar o documento. Corrija os seguintes itens:\n\n'
+        + erros.map(function(e) { return '• ' + e; }).join('\n'),
+        ui.ButtonSet.OK);
+      return;
+    }
+
+    const nomeTipo   = _f4doc_nomeDisplay_(tipo);
+    const subpasta   = (tipo === 'PROCURACAO' || tipo === 'CONTRATO')
+      ? '📋 Contratos e Procurações' : '⚖️ Peças Processuais';
+    const dataStr    = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'yyyy-MM-dd');
+    const nomeArq    = nomeTipo + ' — ' + dados.nome + ' — ' + dataStr;
+    const pasta      = _localizarSubpasta(dados.nome, subpasta) || DriveApp.getFolderById(CFG.PASTA_CLIENTES_ID);
+
+    // Proteção contra sobrescrita — verifica se arquivo já existe
+    if (_f4doc_verificarExistente_(pasta, nomeArq)) {
+      const confSob = ui.alert('⚠️ Arquivo já existe',
+        'Já existe um documento chamado:\n"' + nomeArq + '"\n\n'
+        + 'Deseja criar mesmo assim (uma nova cópia será gerada)?',
+        ui.ButtonSet.YES_NO);
+      if (confSob !== ui.Button.YES) return;
+    }
+
+    // Confirmação final antes de gerar
     const conf = ui.alert(
       '📄 Gerar ' + nomeTipo,
       'Deseja gerar ' + nomeTipo + ' para:\n\n'
       + '👤 Cliente: ' + dados.nome + '\n'
-      + '📋 Contrato: ' + (dados.nrContrato || '—') + '\n'
+      + '📋 Nº/Contrato: ' + (dados.nrContrato || dados.nrProcesso || '—') + '\n'
       + '⚖️ Área: ' + (dados.area || '—') + '\n'
       + '👨‍⚖️ Responsável: ' + (dados.responsavel || '—') + '\n\n'
-      + 'O documento será salvo em:\n📁 ' + dados.nome + ' / 📋 Contratos e Procurações',
+      + 'O documento será salvo em:\n📁 ' + dados.nome + ' / ' + subpasta,
       ui.ButtonSet.YES_NO);
-
     if (conf !== ui.Button.YES) return;
 
-    // Localiza subpasta do cliente
-    const pastaDestino = _localizarSubpasta(dados.nome, '📋 Contratos e Procurações');
-
-    // Define o nome do arquivo
-    const dataStr  = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'yyyy-MM-dd');
-    const nomeArq  = nomeTipo + ' — ' + dados.nome + ' — ' + dataStr;
-
-    // Copia o template para a pasta do cliente
-    const pasta = pastaDestino || DriveApp.getFolderById(CFG.PASTA_CLIENTES_ID);
-    const copia = DriveApp.getFileById(TEMPLATES[tipo]).makeCopy(nomeArq, pasta);
-
-    // Abre e preenche os marcadores
-    const doc = DocumentApp.openById(copia.getId());
+    // Copia o template e preenche os marcadores
+    const copia = DriveApp.getFileById(templateId).makeCopy(nomeArq, pasta);
+    const doc   = DocumentApp.openById(copia.getId());
     _substituirMarcadores(doc, dados);
     doc.saveAndClose();
 
-    registrarLog('Documento gerado: ' + nomeTipo
-      + ' | Cliente: ' + dados.nome
-      + ' | ID: ' + dados.id);
+    // Persiste na aba Documentos
+    _f4doc_gravarDocumentos_(ss, dados, copia, nomeTipo, tipo);
 
-    // Exibe o link do documento gerado
+    // Registra na Auditoria
+    _f4doc_registrarAuditoria_(ss, dados, nomeTipo, 'Gerado com sucesso');
+
+    registrarLog('Documento gerado: ' + nomeTipo + ' | Cliente: ' + dados.nome + ' | ID: ' + dados.id);
+
+    // Oferta exportação em PDF
+    const pdfUrl = _f4doc_ofertarPDF_(copia, pasta, ui);
+
     ui.alert('✅ Documento gerado com sucesso!',
       nomeTipo + ' para ' + dados.nome + ' foi criado.\n\n'
-      + '📂 Salvo em: 📋 Contratos e Procurações\n\n'
-      + 'Acesse e revise antes de imprimir:\n'
+      + '📂 Salvo em: ' + subpasta + '\n'
+      + (pdfUrl ? '📄 PDF gerado: ' + pdfUrl + '\n' : '')
+      + '\nAcesse e revise antes de usar:\n'
       + copia.getUrl(),
       ui.ButtonSet.OK);
 
@@ -1564,7 +1661,13 @@ function _substituirMarcadores(doc, dados) {
     'DATA_EXTENSO'         : dataExtenso,
     'DATA_GERACAO'         : dataGeracao,
     'ENDERECO_ESCRITORIO'  : ESCRITORIO.ENDERECO,
-    'COMARCA_FORO'         : ESCRITORIO.COMARCA
+    'COMARCA_FORO'         : ESCRITORIO.COMARCA,
+    'NASCIMENTO_CLIENTE'   : dados.nascimento      || '—',
+    'ADV_SUBSTABELECIDO'   : dados.advSubstabelecido  || '—',
+    'OAB_SUBSTABELECIDO'   : dados.oabSubstabelecido  || '—',
+    'NR_PROCESSO'          : dados.nrProcesso || dados.nrContrato || '—',
+    'TRIBUNAL_ORGAO'       : dados.tribunalOrgao || ESCRITORIO.COMARCA,
+    'DESCRICAO_PEDIDO'     : dados.descricaoPedido || '—'
   };
 
   const body = doc.getBody();
@@ -3813,5 +3916,189 @@ function _f3_enviarEmailPrazos_(urgentes, normais, vencidos, naoConf, ssId) {
       + ' Vencidos=' + vencidos.length
       + ' Urgentes=' + urgentes.length
       + ' Normais=' + normais.length);
+  }
+}
+
+
+// ████████████████████████████████████████████████████████████
+// FASE 4 — DOCUMENTOS: funções auxiliares (_f4doc_*)
+// ████████████████████████████████████████████████████████████
+
+function _f4doc_nomeDisplay_(tipo) {
+  const nomes = {
+    PROCURACAO:        'Procuração Ad Judicia',
+    CONTRATO:          'Contrato de Honorários',
+    HIPOSSUFICIENCIA:  'Declaração de Hipossuficiência',
+    SUBSTABELECIMENTO: 'Substabelecimento',
+    PETICAO_SIMPLES:   'Petição Simples'
+  };
+  return nomes[tipo] || tipo;
+}
+
+function _f4doc_validarCampos_(dados, tipo) {
+  const erros = [];
+  const vazio = function(v) { return !v || v === '—' || v.toLowerCase().indexOf('não informad') !== -1; };
+
+  if (vazio(dados.nome)) erros.push('Nome do cliente obrigatório');
+  if (vazio(dados.cpf))  erros.push('CPF do cliente obrigatório');
+
+  if (tipo === 'CONTRATO') {
+    if (vazio(dados.tipoHon)) erros.push('Tipo de honorário obrigatório para contrato');
+  }
+  if (tipo === 'SUBSTABELECIMENTO') {
+    if (vazio(dados.advSubstabelecido)) erros.push('Nome do advogado substabelecido obrigatório');
+    if (vazio(dados.oabSubstabelecido)) erros.push('OAB do advogado substabelecido obrigatório');
+  }
+  if (tipo === 'PETICAO_SIMPLES') {
+    if (vazio(dados.descricaoPedido)) erros.push('Descrição do pedido obrigatória');
+  }
+  return erros;
+}
+
+function _f4doc_verificarExistente_(pasta, nomeArq) {
+  try {
+    return pasta.getFilesByName(nomeArq).hasNext();
+  } catch (e) {
+    return false;
+  }
+}
+
+function _f4doc_gravarDocumentos_(ss, dados, copia, nomeTipo, tipo) {
+  try {
+    const aba = resolverAba_(ss, SCHEMA.DOCUMENTOS.aliases);
+    if (!aba) return;
+    const agora = new Date();
+    const linha = [
+      dados.id || '',
+      dados.nome || '',
+      dados.nrProcesso || dados.nrContrato || '',
+      nomeTipo,
+      copia.getName(),
+      copia.getUrl(),
+      tipo,
+      'Gerado',
+      Utilities.formatDate(agora, 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm'),
+      '',
+      ''
+    ];
+    aba.appendRow(linha);
+  } catch (e) {
+    registrarLog('AVISO _f4doc_gravarDocumentos_: ' + e.message);
+  }
+}
+
+function _f4doc_registrarAuditoria_(ss, dados, nomeTipo, resultado) {
+  try {
+    const aba = resolverAba_(ss, SCHEMA.AUDITORIA.aliases);
+    if (!aba) return;
+    const agora = new Date();
+    const linha = [
+      Utilities.formatDate(agora, 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm:ss'),
+      Session.getActiveUser().getEmail() || CFG.EMAIL_LUIZ,
+      '_gerarDocumento',
+      'Cliente: ' + (dados.nome || '') + ' | Doc: ' + nomeTipo,
+      '',
+      'Documento gerado — ' + nomeTipo,
+      resultado,
+      '',
+      Utilities.getUuid()
+    ];
+    aba.appendRow(linha);
+  } catch (e) {
+    registrarLog('AVISO _f4doc_registrarAuditoria_: ' + e.message);
+  }
+}
+
+function _f4doc_ofertarPDF_(docFile, pasta, ui) {
+  const resp = ui.alert('📄 Exportar PDF?',
+    'Deseja também gerar uma cópia em PDF do documento?',
+    ui.ButtonSet.YES_NO);
+  if (resp !== ui.Button.YES) return null;
+  try {
+    const pdfFile = _f4doc_exportarPDF_(docFile, pasta);
+    return pdfFile ? pdfFile.getUrl() : null;
+  } catch (e) {
+    registrarLog('AVISO _f4doc_ofertarPDF_: ' + e.message);
+    ui.alert('⚠️ PDF não gerado',
+      'Não foi possível exportar o PDF:\n' + e.message, ui.ButtonSet.OK);
+    return null;
+  }
+}
+
+function _f4doc_exportarPDF_(docFile, pastaDestino) {
+  const url  = 'https://docs.google.com/document/d/' + docFile.getId() + '/export?format=pdf';
+  const blob = UrlFetchApp.fetch(url, {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  }).getBlob().setName(docFile.getName() + '.pdf');
+  return pastaDestino.createFile(blob);
+}
+
+// ============================================================
+// RASCUNHO DE E-MAIL COM DOCUMENTO (nunca envia automaticamente)
+// ============================================================
+
+function enviarDocumentoComoRascunho() {
+  const ui = SpreadsheetApp.getUi();
+
+  const r1 = ui.prompt('📤 Rascunho com Documento — URL do arquivo',
+    'Cole o URL do documento Google Docs (ou PDF) no Drive:', ui.ButtonSet.OK_CANCEL);
+  if (r1.getSelectedButton() !== ui.Button.OK) return;
+  const driveUrl = r1.getResponseText().trim();
+  if (!driveUrl) return;
+
+  const r2 = ui.prompt('📤 Rascunho com Documento — Destinatário',
+    'E-mail do destinatário:', ui.ButtonSet.OK_CANCEL);
+  if (r2.getSelectedButton() !== ui.Button.OK) return;
+  const para = r2.getResponseText().trim();
+  if (!para || para.indexOf('@') === -1) {
+    ui.alert('⚠️ E-mail inválido', 'Informe um endereço de e-mail válido.', ui.ButtonSet.OK);
+    return;
+  }
+
+  const r3 = ui.prompt('📤 Rascunho com Documento — Assunto',
+    'Assunto do e-mail:', ui.ButtonSet.OK_CANCEL);
+  if (r3.getSelectedButton() !== ui.Button.OK) return;
+  const assunto = r3.getResponseText().trim() || 'Documento — Neves Marques Advocacia';
+
+  const r4 = ui.prompt('📤 Rascunho com Documento — Corpo',
+    'Texto do e-mail (o documento será anexado como PDF):', ui.ButtonSet.OK_CANCEL);
+  if (r4.getSelectedButton() !== ui.Button.OK) return;
+  const corpo = r4.getResponseText().trim() || 'Segue em anexo o documento solicitado.';
+
+  try {
+    // Extrai o ID do arquivo a partir do URL
+    const match = driveUrl.match(/\/d\/([a-zA-Z0-9_-]{20,})/);
+    if (!match) {
+      ui.alert('⚠️ URL inválida', 'Não foi possível extrair o ID do arquivo. Verifique o URL.', ui.ButtonSet.OK);
+      return;
+    }
+    const fileId = match[1];
+    const file   = DriveApp.getFileById(fileId);
+
+    // Exporta como PDF para anexar
+    const pdfBlob = UrlFetchApp.fetch(
+      'https://docs.google.com/document/d/' + fileId + '/export?format=pdf',
+      {
+        headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+        muteHttpExceptions: true
+      }
+    ).getBlob().setName(file.getName() + '.pdf');
+
+    GmailApp.createDraft(para, assunto, corpo, { attachments: [pdfBlob] });
+
+    registrarLog('Rascunho criado para: ' + para + ' | Assunto: ' + assunto);
+
+    ui.alert('✅ Rascunho criado!',
+      'O rascunho foi criado no Gmail com o documento em PDF em anexo.\n\n'
+      + '⚠️ O e-mail NÃO foi enviado automaticamente.\n\n'
+      + 'Abra o Gmail, revise o rascunho e envie manualmente quando estiver pronto.',
+      ui.ButtonSet.OK);
+
+  } catch (err) {
+    registrarLog('ERRO enviarDocumentoComoRascunho: ' + err.message);
+    ui.alert('❌ Erro ao criar rascunho',
+      err.message + '\n\nVerifique o Log para detalhes.',
+      ui.ButtonSet.OK);
   }
 }
