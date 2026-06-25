@@ -353,8 +353,19 @@ function onOpen() {
     .addSeparator()
 
     .addSubMenu(ui.createMenu('⚙️ Sistema')
+      .addItem('⚙️ Setup Inicial (primeira instalação)',    'setupInicial')
       .addItem('▶ Instalar / Reinstalar todos os gatilhos', 'configurarTriggers')
-      .addItem('📋 Ver Log do Sistema',                     'verLog'))
+      .addItem('📋 Ver Log do Sistema',                     'verLog')
+      .addSeparator()
+      .addItem('🏥 Health Check',                           'healthCheck')
+      .addSeparator()
+      .addSubMenu(ui.createMenu('🧪 Testes')
+        .addItem('📨 Testar Processar E-mail (Dry Run)',    'testar_ProcessarEmail')
+        .addItem('📄 Testar Templates de Documento',        'testar_Templates')
+        .addItem('👤 Testar Dados do Cliente Selecionado',  'testar_AnalisarCliente')
+        .addItem('🗂️ Testar Abas e Cabeçalhos',            'testar_AbasECabecalhos'))
+      .addSeparator()
+      .addItem('⚠️ Reset de Teste (somente MODO_TESTE)',    'resetTeste'))
 
     .addToUi();
 }
@@ -368,6 +379,13 @@ function onOpen() {
 // PONTO DE ENTRADA PRINCIPAL (roda no gatilho diário das 7h)
 // ──────────────────────────────────────────────────────────
 function processarEmailsJudiciais() {
+  // Evita execuções paralelas do mesmo gatilho diário
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) {
+    registrarLog('[AVISO] processarEmailsJudiciais: já em execução — instância duplicada abortada.');
+    return;
+  }
+  try {
   const ss     = getPlanilha_();
   const dryRun = _f2_isDryRun_();
   if (dryRun) registrarLog('[TESTE] Modo Dry Run ATIVO — nenhuma escrita será feita na planilha.');
@@ -470,6 +488,9 @@ function processarEmailsJudiciais() {
 
   if (alertasUrgentes.length > 0) enviarAlertaEmail_(alertasUrgentes);
   if (paraRevisar.length > 0)    enviarAvisoRevisao_(paraRevisar);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ──────────────────────────────────────────────────────────
@@ -929,6 +950,11 @@ function inserirProcessoGenerico_(aba, cabRow, headers, p) {
 // SINCRONIZAÇÃO DE KPIs
 // ============================================================
 function atualizarKPIs() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) {
+    registrarLog('[AVISO] atualizarKPIs: já em execução — instância duplicada abortada.');
+    return;
+  }
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
 
@@ -974,6 +1000,8 @@ function atualizarKPIs() {
 
   } catch (err) {
     registrarLog('ERRO atualizarKPIs: ' + err.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -1041,9 +1069,11 @@ function onEditTrigger(e) {
     // Coluna B (2) = Nome / Razão Social
     if (row < 5 || col !== 2) return;
 
-    const nome = String(sheet.getRange(row, 2).getValue()).trim();
-    const area = String(sheet.getRange(row, 9).getValue()).trim() || 'A Definir';
-    const id   = String(sheet.getRange(row, 1).getValue()).trim();
+    // Leitura em lote: cols 1–18 numa única chamada ao Sheets (evita N round-trips)
+    const rowData = sheet.getRange(row, 1, 1, 18).getValues()[0];
+    const id   = String(rowData[0]).trim();  // col A = índice 0
+    const nome = String(rowData[1]).trim();  // col B = índice 1
+    const area = String(rowData[8]).trim() || 'A Definir';  // col I = índice 8
 
     if (!nome || !id.startsWith('CLI-')) return;
 
@@ -1051,8 +1081,8 @@ function onEditTrigger(e) {
     const resultado = criarPastaComSubpastas(nomePasta);
 
     if (resultado.criada) {
-      // Registra o link da pasta na coluna Observações (col R = 18)
-      const obsAtual = sheet.getRange(row, 18).getValue();
+      // Registra o link da pasta na coluna Observações (col R = 18, índice 17)
+      const obsAtual = rowData[17];
       if (!obsAtual) {
         sheet.getRange(row, 18).setValue('📁 ' + resultado.url);
       }
@@ -1092,6 +1122,11 @@ function criarPastaComSubpastas(nomePasta) {
 // ALERTAS DE PRAZO POR E-MAIL (diário, 8h)
 // ============================================================
 function verificarPrazos() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) {
+    registrarLog('[AVISO] verificarPrazos: já em execução — instância duplicada abortada.');
+    return;
+  }
   try {
     const ss  = SpreadsheetApp.getActiveSpreadsheet();
     const aba = getSheet_(ss, 'Agenda');
@@ -1189,6 +1224,8 @@ function verificarPrazos() {
 
   } catch (err) {
     registrarLog('ERRO verificarPrazos: ' + err.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -1270,6 +1307,11 @@ function _enviarEmailPrazos(urgentes, normais, vencidos, ssId) {
 // BACKUP SEMANAL
 // ============================================================
 function backupSemanal() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) {
+    registrarLog('[AVISO] backupSemanal: já em execução — instância duplicada abortada.');
+    return;
+  }
   try {
     const ss    = SpreadsheetApp.getActiveSpreadsheet();
     const hoje  = Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'yyyy-MM-dd HH-mm');
@@ -1281,6 +1323,8 @@ function backupSemanal() {
     _expurgarBackupsAntigos_(pasta, CFG.MAX_BACKUPS);
   } catch (err) {
     registrarLog('ERRO backupSemanal: ' + err.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -1736,6 +1780,11 @@ function _dataExtenso(data) {
 // ████████████████████████████████████████████████████████████
 
 function relatorioSemanal() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) {
+    registrarLog('[AVISO] relatorioSemanal: já em execução — instância duplicada abortada.');
+    return;
+  }
   try {
     const ss   = SpreadsheetApp.getActiveSpreadsheet();
     const hoje = new Date();
@@ -1773,6 +1822,8 @@ function relatorioSemanal() {
     }
   } catch (err) {
     registrarLog('ERRO relatorioSemanal: ' + err.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -2148,6 +2199,11 @@ function _r3_html(ctx) {
 
 // ----- Alerta de processos sem movimentação -----
 function alertarProcessosSemMovimento() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) {
+    registrarLog('[AVISO] alertarProcessosSemMovimento: já em execução — instância duplicada abortada.');
+    return;
+  }
   try {
     const ss      = SpreadsheetApp.getActiveSpreadsheet();
     const inativos = _r3_processosInativos(ss);
@@ -2207,11 +2263,18 @@ function alertarProcessosSemMovimento() {
 
   } catch (err) {
     registrarLog('ERRO alertarProcessosSemMovimento: ' + err.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
 // ----- Aniversários de clientes -----
 function verificarAniversariosClientes() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) {
+    registrarLog('[AVISO] verificarAniversariosClientes: já em execução — instância duplicada abortada.');
+    return;
+  }
   try {
     const ss  = SpreadsheetApp.getActiveSpreadsheet();
     const hoje = new Date(); hoje.setHours(0,0,0,0);
@@ -2243,6 +2306,8 @@ function verificarAniversariosClientes() {
     }
   } catch (err) {
     registrarLog('ERRO verificarAniversariosClientes: ' + err.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -3524,20 +3589,27 @@ function _f2_computarHash_(dados, msg) {
   return bytes.map(function(b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
 }
 
+// Cache de hashes carregado uma única vez por execução — evita ler a aba
+// Andamentos a cada mensagem num loop de até 50 threads × N mensagens.
+let _deduplicacaoCache_ = null;
+
 function _f2_verificarDuplicata_(ss, hash) {
   try {
-    const aba = resolverAba_(ss, SCHEMA.ANDAMENTOS.aliases);
-    if (!aba) return false; // aba Andamentos ainda não criada → não bloqueia
-
-    const dados     = aba.getDataRange().getValues();
-    const cabecalho = dados[0] || [];
-    const colHash   = cabecalho.indexOf('Hash de deduplicação');
-    if (colHash < 0) return false;
-
-    for (let r = 1; r < dados.length; r++) {
-      if (String(dados[r][colHash]).trim() === hash) return true;
+    if (!_deduplicacaoCache_) {
+      _deduplicacaoCache_ = new Set();
+      const aba = resolverAba_(ss, SCHEMA.ANDAMENTOS.aliases);
+      if (aba) {
+        const dados    = aba.getDataRange().getValues();
+        const colHash  = (dados[0] || []).indexOf('Hash de deduplicação');
+        if (colHash >= 0) {
+          for (let r = 1; r < dados.length; r++) {
+            const h = String(dados[r][colHash]).trim();
+            if (h) _deduplicacaoCache_.add(h);
+          }
+        }
+      }
     }
-    return false;
+    return _deduplicacaoCache_.has(hash);
   } catch (e) {
     Logger.log('[F2] _f2_verificarDuplicata_ erro: ' + e.message);
     return false; // em caso de erro, não bloqueia o processamento
@@ -5154,4 +5226,414 @@ Responda com JSON:
     registrarLog('ERRO sugerirPautaSemanal: ' + e.message);
     ui.alert('❌ Erro', e.message, ui.ButtonSet.OK);
   }
+}
+
+// ============================================================
+// FASE 10 — ROBUSTEZ TÉCNICA
+// Utilitários transversais: logging estruturado, CacheService,
+// healthCheck, setup inicial, reset de teste, funções de teste.
+// ============================================================
+
+// ---- Logging estruturado ----
+
+/**
+ * Log com nível de severidade. Mantém compatibilidade com
+ * as centenas de chamadas existentes a registrarLog().
+ * Uso: _log_('WARN', 'Aba não encontrada', 'verificarPrazos')
+ */
+function _log_(nivel, msg, contexto) {
+  const prefixos = { INFO: 'ℹ️', WARN: '⚠️', ERROR: '❌' };
+  const p = prefixos[nivel] || 'ℹ️';
+  const txt = p + ' [' + nivel + ']' + (contexto ? ' [' + contexto + ']' : '') + ' ' + msg;
+  registrarLog(txt);
+  if (nivel === 'ERROR') console.error(txt);
+}
+
+// ---- CacheService (cross-execution, TTL até 6h) ----
+
+function _cacheGet_(chave) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const v     = cache.get(chave);
+    return v !== null ? JSON.parse(v) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function _cacheSet_(chave, valor, ttlSeg) {
+  try {
+    CacheService.getScriptCache().put(chave, JSON.stringify(valor), ttlSeg || 3600);
+  } catch (e) {
+    // silencia: cache é best-effort
+  }
+}
+
+function _cacheDel_(chave) {
+  try {
+    CacheService.getScriptCache().remove(chave);
+  } catch (e) {}
+}
+
+// ---- Health Check ----
+
+/**
+ * Valida todas as dependências do script:
+ * planilha, abas críticas, pasta do Drive, API key e triggers.
+ * Seguro para executar manualmente a qualquer momento.
+ */
+function healthCheck() {
+  const ui       = SpreadsheetApp.getUi();
+  const erros    = [];
+  const avisos   = [];
+  const ok       = [];
+
+  // 1. Planilha acessível
+  try {
+    const ss = getPlanilha_();
+    ok.push('✅ Planilha acessível: ' + ss.getName());
+
+    // 2. Abas críticas
+    const ABAS_CRITICAS = ['Clientes', 'Processos', 'Agenda'];
+    for (const nome of ABAS_CRITICAS) {
+      const aba = getSheet_(ss, nome);
+      if (aba) {
+        ok.push('✅ Aba ' + nome + ': ' + aba.getLastRow() + ' linhas');
+      } else {
+        erros.push('❌ Aba crítica ausente: ' + nome);
+      }
+    }
+
+    // 3. Abas opcionais
+    const ABAS_OPCAO = ['Financeiro', 'Andamentos', 'Documentos', '🔧 Log', '🤖 IA Insights', 'IA_Log'];
+    for (const nome of ABAS_OPCAO) {
+      const aba = resolverAba_(ss, [nome]);
+      if (aba) {
+        ok.push('✅ Aba ' + nome + ': presente');
+      } else {
+        avisos.push('⚠️ Aba opcional ausente: ' + nome);
+      }
+    }
+  } catch (e) {
+    erros.push('❌ Planilha inacessível: ' + e.message);
+  }
+
+  // 4. Pasta de clientes no Drive
+  try {
+    const pasta = DriveApp.getFolderById(CFG.PASTA_CLIENTES_ID);
+    ok.push('✅ Pasta Drive: ' + pasta.getName());
+  } catch (e) {
+    erros.push('❌ Pasta de clientes no Drive inacessível: ' + e.message);
+  }
+
+  // 5. API Key Claude
+  const apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
+  if (apiKey && apiKey.startsWith('sk-ant-')) {
+    ok.push('✅ Claude API Key: configurada');
+  } else if (apiKey) {
+    avisos.push('⚠️ Claude API Key: presente mas com formato inesperado');
+  } else {
+    avisos.push('⚠️ Claude API Key: não configurada (funções de IA indisponíveis)');
+  }
+
+  // 6. E-mail Kariny
+  if (CFG.EMAIL_KARINY && !CFG.EMAIL_KARINY.startsWith('PREENCHA')) {
+    ok.push('✅ E-mail Kariny: configurado');
+  } else {
+    avisos.push('⚠️ CFG.EMAIL_KARINY não preenchido — relatórios enviados só para Luiz');
+  }
+
+  // 7. Endereço do escritório
+  if (ESCRITORIO.ENDERECO && !ESCRITORIO.ENDERECO.startsWith('PREENCHA')) {
+    ok.push('✅ Endereço do escritório: configurado');
+  } else {
+    avisos.push('⚠️ ESCRITORIO.ENDERECO não preenchido — documentos gerados com placeholder');
+  }
+
+  // 8. Triggers instalados
+  try {
+    const triggers = ScriptApp.getProjectTriggers();
+    const funcoesTrigger = triggers.map(t => t.getHandlerFunction());
+    const ESPERADOS = ['processarEmailsJudiciais', 'verificarPrazos', 'atualizarKPIs',
+                       'relatorioSemanal', 'backupSemanal'];
+    for (const fn of ESPERADOS) {
+      if (funcoesTrigger.includes(fn)) {
+        ok.push('✅ Trigger: ' + fn);
+      } else {
+        erros.push('❌ Trigger ausente: ' + fn + ' (execute configurarTriggers)');
+      }
+    }
+  } catch (e) {
+    avisos.push('⚠️ Não foi possível verificar triggers: ' + e.message);
+  }
+
+  // 9. Templates de documentos
+  const TEMPLATE_NOMES = Object.keys(TEMPLATES);
+  for (const nome of TEMPLATE_NOMES) {
+    const id = TEMPLATES[nome];
+    if (!id || id.startsWith('PREENCHA')) {
+      avisos.push('⚠️ Template ' + nome + ': ID não configurado');
+    } else {
+      try {
+        DriveApp.getFileById(id);
+        ok.push('✅ Template ' + nome + ': acessível');
+      } catch (e) {
+        erros.push('❌ Template ' + nome + ': ID inválido ou sem acesso (' + id + ')');
+      }
+    }
+  }
+
+  // Resumo
+  const total  = ok.length + avisos.length + erros.length;
+  const status = erros.length > 0 ? '❌ FALHAS CRÍTICAS' : avisos.length > 0 ? '⚠️ AVISOS' : '✅ TUDO OK';
+
+  const relatorio = [
+    '🏥 Health Check — Neves Marques Advocacia',
+    '─'.repeat(45),
+    'Status: ' + status,
+    '',
+    erros.length  ? '— ERROS (' + erros.length + ') —\n'  + erros.join('\n')  : '',
+    avisos.length ? '— AVISOS (' + avisos.length + ') —\n' + avisos.join('\n') : '',
+    '— OK (' + ok.length + '/' + total + ') —\n' + ok.join('\n')
+  ].filter(Boolean).join('\n');
+
+  registrarLog('healthCheck: ' + status + ' | erros=' + erros.length + ' avisos=' + avisos.length);
+  ui.alert('🏥 Health Check', relatorio.substring(0, 2000), ui.ButtonSet.OK);
+}
+
+// ---- Setup inicial ----
+
+/**
+ * Setup de primeira instalação: cria abas novas, instala triggers,
+ * orienta sobre configurações pendentes.
+ * Seguro para reexecutar — não destrói dados existentes.
+ */
+function setupInicial() {
+  const ui = SpreadsheetApp.getUi();
+
+  const confirm = ui.alert('⚙️ Setup Inicial',
+    'Este assistente irá:\n'
+    + '1. Criar as abas novas necessárias (sem alterar as existentes)\n'
+    + '2. Instalar todos os triggers automáticos\n'
+    + '3. Verificar configurações pendentes\n\n'
+    + 'Dados existentes NÃO serão apagados. Continuar?',
+    ui.ButtonSet.YES_NO);
+
+  if (confirm !== ui.Button.YES) return;
+
+  const etapas = [];
+
+  // Etapa 1: criar abas
+  try {
+    criarAbasNovas();
+    etapas.push('✅ Abas criadas/verificadas');
+  } catch (e) {
+    etapas.push('⚠️ Erro ao criar abas: ' + e.message);
+  }
+
+  // Etapa 2: triggers
+  try {
+    configurarTriggers();
+    etapas.push('✅ Triggers instalados');
+  } catch (e) {
+    etapas.push('⚠️ Erro ao instalar triggers: ' + e.message);
+  }
+
+  // Etapa 3: pendências de configuração
+  const pendencias = [];
+  if (!CFG.EMAIL_KARINY || CFG.EMAIL_KARINY.startsWith('PREENCHA')) {
+    pendencias.push('• CFG.EMAIL_KARINY: preencha o e-mail da Kariny no código');
+  }
+  if (!ESCRITORIO.ENDERECO || ESCRITORIO.ENDERECO.startsWith('PREENCHA')) {
+    pendencias.push('• ESCRITORIO.ENDERECO: preencha o endereço do escritório no código');
+  }
+  if (!PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY')) {
+    pendencias.push('• Claude API Key: configure em IA → Configurar Chave API');
+  }
+
+  const msg = etapas.join('\n')
+    + (pendencias.length
+        ? '\n\n⚠️ PENDÊNCIAS MANUAIS:\n' + pendencias.join('\n')
+        : '\n\n✅ Configurações OK.');
+
+  ui.alert('✅ Setup concluído', msg, ui.ButtonSet.OK);
+  registrarLog('setupInicial: executado. Pendências=' + pendencias.length);
+}
+
+// ---- Reset seguro (SOMENTE ambiente de teste) ----
+
+/**
+ * Apaga dados de teste das abas Log, IA_Log e Andamentos.
+ * NUNCA apaga Clientes, Processos, Agenda ou Financeiro.
+ * Exige confirmação dupla + variável de ambiente de teste.
+ */
+function resetTeste() {
+  const ui    = SpreadsheetApp.getUi();
+  const props = PropertiesService.getScriptProperties();
+
+  // Guarda-corpo: só executa se a flag de teste estiver ativa
+  const modoTeste = props.getProperty('MODO_TESTE') === 'true';
+  if (!modoTeste) {
+    ui.alert('🔒 Bloqueado',
+      'resetTeste() só executa quando a propriedade MODO_TESTE=true está configurada.\n\n'
+      + 'Para ativar: Apps Script → Propriedades do script → MODO_TESTE = true\n\n'
+      + '⚠️ Nunca ative em ambiente de produção.',
+      ui.ButtonSet.OK);
+    return;
+  }
+
+  const c1 = ui.alert('⚠️ ATENÇÃO — AMBIENTE DE TESTE',
+    'Isso vai APAGAR os dados das abas:\n  • 🔧 Log\n  • IA_Log\n  • 🤖 IA Insights\n  • Andamentos\n\n'
+    + 'Abas Clientes, Processos, Agenda e Financeiro NÃO serão tocadas.\n\nConfirmar?',
+    ui.ButtonSet.YES_NO);
+  if (c1 !== ui.Button.YES) return;
+
+  const c2 = ui.prompt('⚠️ Confirmação dupla',
+    'Digite CONFIRMAR para prosseguir:', ui.ButtonSet.OK_CANCEL);
+  if (c2.getSelectedButton() !== ui.Button.OK || c2.getResponseText().trim() !== 'CONFIRMAR') {
+    ui.alert('Operação cancelada.'); return;
+  }
+
+  const ss = getPlanilha_();
+  const ABAS_RESET = ['🔧 Log', 'IA_Log', '🤖 IA Insights', 'Andamentos'];
+  const resultado  = [];
+
+  for (const nomeAba of ABAS_RESET) {
+    try {
+      const aba = resolverAba_(ss, [nomeAba]);
+      if (!aba) { resultado.push('⚪ ' + nomeAba + ': não existe'); continue; }
+      const linhas = aba.getLastRow();
+      if (linhas > 1) {
+        aba.deleteRows(2, linhas - 1); // mantém cabeçalho (linha 1)
+      }
+      resultado.push('✅ ' + aba.getName() + ': ' + (linhas - 1) + ' linha(s) apagada(s)');
+    } catch (e) {
+      resultado.push('❌ ' + nomeAba + ': ' + e.message);
+    }
+  }
+
+  // Limpa cursor incremental e cache de deduplicação
+  props.deleteProperty(F2.PROP_LAST_RUN);
+  _deduplicacaoCache_ = null;
+
+  registrarLog('[TESTE] resetTeste executado: ' + resultado.join(' | '));
+  ui.alert('✅ Reset concluído (teste)', resultado.join('\n'), ui.ButtonSet.OK);
+}
+
+// ---- Funções de teste ----
+
+/**
+ * Executa processarEmailsJudiciais em modo Dry Run.
+ * Nunca grava na planilha nem altera labels do Gmail.
+ */
+function testar_ProcessarEmail() {
+  const props = PropertiesService.getScriptProperties();
+  const dryRunAntes = props.getProperty(F2.PROP_DRY_RUN);
+  props.setProperty(F2.PROP_DRY_RUN, 'true');
+  try {
+    processarEmailsJudiciais();
+    SpreadsheetApp.getUi().alert('✅ Teste concluído',
+      'processarEmailsJudiciais rodou em modo Dry Run.\nVerifique a aba 🔧 Log para o resultado.',
+      SpreadsheetApp.getUi().ButtonSet.OK);
+  } finally {
+    // Restaura estado original (não deixa dry run ativo inadvertidamente)
+    if (dryRunAntes) {
+      props.setProperty(F2.PROP_DRY_RUN, dryRunAntes);
+    } else {
+      props.deleteProperty(F2.PROP_DRY_RUN);
+    }
+  }
+}
+
+/**
+ * Verifica se os templates de documento estão acessíveis no Drive.
+ */
+function testar_Templates() {
+  const ui       = SpreadsheetApp.getUi();
+  const resultado = [];
+
+  for (const [nome, id] of Object.entries(TEMPLATES)) {
+    if (!id || id.startsWith('PREENCHA')) {
+      resultado.push('⚪ ' + nome + ': ID não configurado');
+      continue;
+    }
+    try {
+      const f = DriveApp.getFileById(id);
+      resultado.push('✅ ' + nome + ': ' + f.getName());
+    } catch (e) {
+      resultado.push('❌ ' + nome + ': ID inválido ou sem acesso');
+    }
+  }
+
+  ui.alert('📄 Teste de Templates', resultado.join('\n'), ui.ButtonSet.OK);
+  registrarLog('testar_Templates: ' + resultado.join(' | '));
+}
+
+/**
+ * Simula a análise de cliente sem gravar nada.
+ * Lê os dados do cliente selecionado e exibe o prompt que seria enviado à IA.
+ */
+function testar_AnalisarCliente() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const aba   = resolverAba_(ss, ['Clientes']);
+  if (!aba) { ui.alert('❌ Aba Clientes não encontrada.'); return; }
+
+  const linha = aba.getActiveCell().getRow();
+  if (linha < 2) { ui.alert('⚠️ Selecione uma linha de cliente.'); return; }
+
+  const dados = _lerDadosCliente(aba, linha);
+  if (!dados.nome) { ui.alert('⚠️ Nenhum dado de cliente na linha selecionada.'); return; }
+
+  const docs  = _f5_docsCliente_(ss, dados.id, dados.nome);
+  const procs = _f4_buscarProcessos(dados.id);
+
+  const preview = [
+    '🧪 TESTE — Dados coletados para: ' + dados.nome,
+    '─'.repeat(40),
+    'ID: ' + dados.id,
+    'Área: ' + dados.areaDireito,
+    'Telefone: ' + dados.telefone,
+    'Responsável: ' + dados.advogadoResp,
+    '',
+    'Processos vinculados: ' + (procs ? procs.substring(0, 200) : '(nenhum)'),
+    '',
+    'Documentos: ' + docs.lista.length + ' entregue(s)',
+    'Pendentes: ' + (docs.pendentes.join(', ') || 'nenhum'),
+    '',
+    '(A IA NÃO foi chamada — apenas verificação dos dados coletados)'
+  ].join('\n');
+
+  ui.alert('🧪 Teste analisarCliente', preview, ui.ButtonSet.OK);
+}
+
+/**
+ * Verifica a integridade das abas e exibe um resumo rápido
+ * sem modificar nada. Alternativa rápida ao healthCheck completo.
+ */
+function testar_AbasECabecalhos() {
+  const ui      = SpreadsheetApp.getUi();
+  const ss      = getPlanilha_();
+  const linhas  = [];
+
+  Object.keys(SCHEMA).forEach(function(k) {
+    const def = SCHEMA[k];
+    const aba = resolverAba_(ss, def.aliases);
+    if (!aba) {
+      linhas.push((def.existente ? '❌' : '⚪') + ' ' + def.nome + ': ausente');
+      return;
+    }
+    const cab     = aba.getRange(1, 1, 1, aba.getLastColumn()).getValues()[0];
+    const faltando = def.headers.filter(function(h) {
+      return !cab.some(function(c) { return _normNome_(String(c)) === _normNome_(h); });
+    });
+    linhas.push((faltando.length ? '⚠️' : '✅') + ' ' + aba.getName()
+      + ': ' + aba.getLastRow() + ' linhas'
+      + (faltando.length ? ' | faltando: ' + faltando.join(', ') : ''));
+  });
+
+  const msg = linhas.join('\n');
+  ui.alert('🧪 Abas e Cabeçalhos', msg.substring(0, 1500), ui.ButtonSet.OK);
+  registrarLog('testar_AbasECabecalhos: verificação concluída.');
 }
