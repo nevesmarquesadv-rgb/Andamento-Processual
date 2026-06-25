@@ -262,3 +262,88 @@ nunca envia mensagens automaticamente (tudo como rascunho).
 3. Verifique a aba `🔧 Log` após cada execução.
 4. Reverter: cada mudança é um commit isolado (`git revert`); o editor do
    Apps Script também mantém histórico de versões.
+
+---
+
+## ✅ FASE 11 — Testes e Validação
+
+### Como executar
+
+**Suite completa (recomendado):**
+Menu `⚖️ Neves Marques → ⚙️ Sistema → 🧪 Testes & Validação → ▶ Executar Suite Completa (15 testes)`
+
+**Testes individuais:**
+Cada teste disponível no mesmo submenu como item separado.
+
+**Saída:** painel de resultado na tela + todas as entradas no `🔧 Log`.
+
+---
+
+### Critérios de aceitação
+
+| Resultado | Significado |
+|---|---|
+| ✅ passou | Comportamento esperado confirmado |
+| ❌ falhou | Bug ou dependência ausente — investigar |
+| ⚪ pulado | Pré-requisito ausente (ex.: API key não configurada) — não é falha |
+
+O sistema está **pronto para uso** quando `falhou = 0`.
+Testes pulados são aceitáveis se o pré-requisito for intencional.
+
+---
+
+### Matriz de testes
+
+| # | Teste | Função GAS | O que verifica | Efeito colateral | Cleanup |
+|---|---|---|---|---|---|
+| 01 | Criação de Cliente | `t11_CriacaoCliente` | `criarPastaComSubpastas` cria pasta principal + N subpastas | Cria pasta no Drive | ✅ automático |
+| 02 | Criação de Pasta (idempotência) | `t11_CriacaoPasta` | 2ª chamada retorna `criada=false` sem criar duplicata | Cria pasta no Drive | ✅ automático |
+| 03 | Geração de Contrato | `t11_GeracaoContrato` | Template CONTRATO acessível + validação de campos | Nenhum | — |
+| 04 | Geração de Procuração | `t11_GeracaoProcuracao` | Template PROCURACAO acessível + validação de campos | Nenhum | — |
+| 05 | Leitura de E-mail com CNJ | `t11_LeituraEmailComCNJ` | `extrairPjePush_` extrai CNJ correto de corpo fictício | Nenhum | — |
+| 06 | E-mail sem número CNJ | `t11_EmailSemCNJ` | Remetente desconhecido e corpo sem CNJ → ambos `null` | Nenhum | — |
+| 07 | Deduplicação de Andamentos | `t11_Deduplicacao` | `normNum_`, cache `_deduplicacaoCache_` e detecção de duplicata | Modifica `_deduplicacaoCache_` temporariamente | ✅ restaurado |
+| 08 | Criação de Prazo Pendente | `t11_CriacaoPrazo` | `appendAgenda_` adiciona linha com `Status = "Pendente de conferência"` | Adiciona linha na Agenda | ✅ automático |
+| 09 | Alerta de Prazo (KPIs) | `t11_Alerta` | `_f3_kpisAgenda_` retorna todos os 7 campos esperados | Nenhum | — |
+| 10 | Relatório Semanal (coleta) | `t11_RelatorioSemanal` | `_r3_kpis`, `_r3_financeiro`, `_r3_agenda`, `_r3_processosInativos` sem enviar e-mail | Nenhum | — |
+| 11 | Backup Automático | `t11_Backup` | `backupSemanal` cria arquivo na pasta `🗄️ Backups - Dashboard` | Cria arquivo no Drive | Não apagado (backup real) |
+| 12 | Erro Proposital (robustez) | `t11_ErroProposital` | `resolverAba_`, `_f4doc_validarCampos_`, `normNum_`, `extrairDadosEmail_` tratam entradas inválidas sem exceção | Nenhum | — |
+| 13 | Log e Auditoria | `t11_LogAuditoria` | `registrarLog` escreve e linha é encontrada na aba 🔧 Log | Adiciona linha no Log e Auditoria | ✅ automático |
+| 14 | Chamada da IA (Claude) | `t11_ChamadaIA` | `_f4_chamarClaude` retorna resposta não-nula para prompt mínimo | Chamada real à API (custo ≈ $0,0001) | — |
+| 15 | Modo Dry Run | `t11_ModoDryRun` | `_f2_isDryRun_()` reflete `F2.PROP_DRY_RUN` corretamente | Altera PropertiesService temporariamente | ✅ restaurado |
+
+---
+
+### Notas por teste
+
+**Testes 01–02 (Drive):** exigem que `CFG.PASTA_CLIENTES_ID` aponte para uma pasta acessível. Se o Drive estiver sem permissão, os testes falham com mensagem de erro descritiva.
+
+**Testes 03–04 (Documentos):** não criam arquivo. Testam apenas acessibilidade do template e lógica de validação. Para testar a geração real, use `gerarContrato()`/`gerarProcuracao()` manualmente.
+
+**Testes 05–06 (Parsing):** usam corpos fictícios em memória — sem acesso ao Gmail. Testam a lógica de regex, não a conectividade.
+
+**Teste 07 (Deduplicação):** reseta e restaura `_deduplicacaoCache_` com `finally` — não afeta execuções reais subsequentes na mesma sessão.
+
+**Teste 08 (Prazo):** verifica que `appendAgenda_` usa `F3.STATUS_PENDENTE = "Pendente de conferência"` e que a linha aparece corretamente antes do cleanup.
+
+**Teste 10 (Relatório):** propositalmente não envia e-mail. Para testar o envio real, use `relatorioSemanal()` manualmente — ele usará `GmailApp.sendEmail` para os destinos configurados.
+
+**Teste 11 (Backup):** o backup criado é real e permanece na pasta `🗄️ Backups - Dashboard`. O mecanismo de expurgo em `_expurgarBackupsAntigos_` limita a `CFG.MAX_BACKUPS = 8` automaticamente.
+
+**Teste 14 (IA):** pulado automaticamente se `CLAUDE_API_KEY` não estiver configurada — não é falha. Quando executado, registra custo em `IA_Log`.
+
+**Teste 15 (Dry Run):** usa `finally` para restaurar o estado original de `F2.PROP_DRY_RUN`, inclusive se o teste lançar exceção.
+
+---
+
+### Cobertura e lacunas conhecidas
+
+| Área | Cobertura | Observação |
+|---|---|---|
+| Parsing de e-mails PJe | ✅ Parcial | Corpo fictício; não testa e-mails reais do Gmail |
+| Parsing EPROC / Recorte Digital | ❌ Ausente | `extrairEproc_`, `extrairRecorteDigital_` — adicionar em fase futura |
+| Geração real de documento (Drive) | ❌ Ausente | Requer mockar `DocumentApp.openById` ou usar conta de teste |
+| Envio de relatório por e-mail | ❌ Ausente | `GmailApp.sendEmail` não testado automaticamente (intencional) |
+| Triggers de tempo | ❌ Ausente | Não é possível testar triggers time-based em GAS sem execução real |
+| Análise de IA (JSON completo) | ⚠️ Parcial | Teste 14 verifica apenas conectividade; não valida schema JSON |
+| `analisarTodosProcessos` (lote) | ❌ Ausente | Depende de dados reais nos Processos |

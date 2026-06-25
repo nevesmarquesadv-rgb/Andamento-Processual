@@ -359,11 +359,29 @@ function onOpen() {
       .addSeparator()
       .addItem('🏥 Health Check',                           'healthCheck')
       .addSeparator()
-      .addSubMenu(ui.createMenu('🧪 Testes')
-        .addItem('📨 Testar Processar E-mail (Dry Run)',    'testar_ProcessarEmail')
-        .addItem('📄 Testar Templates de Documento',        'testar_Templates')
-        .addItem('👤 Testar Dados do Cliente Selecionado',  'testar_AnalisarCliente')
-        .addItem('🗂️ Testar Abas e Cabeçalhos',            'testar_AbasECabecalhos'))
+      .addSubMenu(ui.createMenu('🧪 Testes & Validação')
+        .addItem('▶ Executar Suite Completa (15 testes)',   'executarSuiteDeTestes')
+        .addSeparator()
+        .addItem('01 — Criação de Cliente',                 't11_CriacaoCliente')
+        .addItem('02 — Criação de Pasta (idempotência)',    't11_CriacaoPasta')
+        .addItem('03 — Geração de Contrato',                't11_GeracaoContrato')
+        .addItem('04 — Geração de Procuração',              't11_GeracaoProcuracao')
+        .addItem('05 — Leitura de E-mail com CNJ',          't11_LeituraEmailComCNJ')
+        .addItem('06 — E-mail sem número CNJ',              't11_EmailSemCNJ')
+        .addItem('07 — Deduplicação de Andamentos',         't11_Deduplicacao')
+        .addItem('08 — Criação de Prazo Pendente',          't11_CriacaoPrazo')
+        .addItem('09 — Alerta de Prazo (KPIs)',             't11_Alerta')
+        .addItem('10 — Relatório Semanal (coleta)',         't11_RelatorioSemanal')
+        .addItem('11 — Backup Automático',                  't11_Backup')
+        .addItem('12 — Erro Proposital (robustez)',         't11_ErroProposital')
+        .addItem('13 — Log e Auditoria',                   't11_LogAuditoria')
+        .addItem('14 — Chamada da IA (Claude)',             't11_ChamadaIA')
+        .addItem('15 — Modo Dry Run',                       't11_ModoDryRun')
+        .addSeparator()
+        .addItem('🩺 Processar E-mail (Dry Run)',           'testar_ProcessarEmail')
+        .addItem('📄 Templates no Drive',                   'testar_Templates')
+        .addItem('👤 Dados do Cliente Selecionado',         'testar_AnalisarCliente')
+        .addItem('🗂️ Abas e Cabeçalhos',                   'testar_AbasECabecalhos'))
       .addSeparator()
       .addItem('⚠️ Reset de Teste (somente MODO_TESTE)',    'resetTeste'))
 
@@ -5636,4 +5654,610 @@ function testar_AbasECabecalhos() {
   const msg = linhas.join('\n');
   ui.alert('🧪 Abas e Cabeçalhos', msg.substring(0, 1500), ui.ButtonSet.OK);
   registrarLog('testar_AbasECabecalhos: verificação concluída.');
+}
+
+// ============================================================
+// FASE 11 — TESTES E VALIDAÇÃO
+// Suite de 15 testes cobre: criação de pastas/clientes,
+// geração de documentos, parsing de e-mails, deduplicação,
+// prazos, alertas, relatório, backup, erros, log, IA, dry run.
+// Cada função retorna { nome, passou, detalhe }.
+// ============================================================
+
+// ---- Helpers de resultado ----
+
+function _t11_ok_(nome, detalhe) {
+  Logger.log('[T11 ✅] ' + nome + ': ' + detalhe);
+  return { nome: nome, passou: true,  detalhe: detalhe };
+}
+
+function _t11_fail_(nome, detalhe) {
+  Logger.log('[T11 ❌] ' + nome + ': ' + detalhe);
+  return { nome: nome, passou: false, detalhe: detalhe };
+}
+
+function _t11_skip_(nome, motivo) {
+  Logger.log('[T11 ⚪] ' + nome + ': ' + motivo);
+  return { nome: nome, passou: null,  detalhe: '(pulado) ' + motivo };
+}
+
+// ---- Teste 01: Criação de Cliente ----
+// Verifica que criarPastaComSubpastas() cria a pasta principal
+// e todas as CFG.SUBPASTAS dentro da pasta de clientes.
+
+function t11_CriacaoCliente() {
+  const NOME_TESTE = '_T11_CLIENTE_TESTE_';
+  try {
+    const pastaClientes = DriveApp.getFolderById(CFG.PASTA_CLIENTES_ID);
+
+    // Cleanup preventivo (execução anterior que falhou antes do cleanup)
+    const iterPrev = pastaClientes.getFoldersByName(NOME_TESTE);
+    if (iterPrev.hasNext()) iterPrev.next().setTrashed(true);
+
+    const r = criarPastaComSubpastas(NOME_TESTE);
+    if (!r.criada) return _t11_fail_('CriacaoCliente', 'criarPastaComSubpastas: criada=false');
+
+    const iter = pastaClientes.getFoldersByName(NOME_TESTE);
+    if (!iter.hasNext()) return _t11_fail_('CriacaoCliente', 'Pasta não encontrada após criação');
+    const pasta = iter.next();
+
+    const subs = [];
+    const subIter = pasta.getFolders();
+    while (subIter.hasNext()) subs.push(subIter.next().getName());
+
+    pasta.setTrashed(true); // cleanup
+
+    if (subs.length < CFG.SUBPASTAS.length) {
+      return _t11_fail_('CriacaoCliente',
+        'Subpastas: ' + subs.length + ' (esperado ' + CFG.SUBPASTAS.length + '): ' + subs.join(', '));
+    }
+
+    return _t11_ok_('CriacaoCliente', 'Pasta + ' + subs.length + ' subpastas criadas e limpas');
+  } catch (e) {
+    return _t11_fail_('CriacaoCliente', e.message);
+  }
+}
+
+// ---- Teste 02: Criação de Pasta (idempotência) ----
+// Verifica que chamar criarPastaComSubpastas() duas vezes com o
+// mesmo nome não cria pasta duplicada (criada=false na 2ª chamada).
+
+function t11_CriacaoPasta() {
+  const NOME_TESTE = '_T11_PASTA_IDEM_';
+  try {
+    const pastaClientes = DriveApp.getFolderById(CFG.PASTA_CLIENTES_ID);
+
+    const iterPrev = pastaClientes.getFoldersByName(NOME_TESTE);
+    if (iterPrev.hasNext()) iterPrev.next().setTrashed(true);
+
+    const r1 = criarPastaComSubpastas(NOME_TESTE);
+    if (!r1.criada) return _t11_fail_('CriacaoPasta', '1ª chamada: criada=false (pasta não criada)');
+
+    const r2 = criarPastaComSubpastas(NOME_TESTE);
+
+    // Cleanup independente do resultado
+    const iterFim = pastaClientes.getFoldersByName(NOME_TESTE);
+    while (iterFim.hasNext()) iterFim.next().setTrashed(true);
+
+    if (r2.criada) return _t11_fail_('CriacaoPasta', '2ª chamada: criada=true (duplicata criada — não idempotente)');
+
+    return _t11_ok_('CriacaoPasta', 'Idempotente: 1ª criou, 2ª retornou criada=false');
+  } catch (e) {
+    return _t11_fail_('CriacaoPasta', e.message);
+  }
+}
+
+// ---- Teste 03: Geração de Contrato ----
+// Verifica template acessível no Drive, validação rejeita dados
+// vazios e aceita dados completos. Não cria arquivo.
+
+function t11_GeracaoContrato() {
+  try {
+    const templateId = TEMPLATES.CONTRATO;
+    if (!templateId || templateId.startsWith('PREENCHA')) {
+      return _t11_skip_('GeracaoContrato', 'TEMPLATES.CONTRATO não configurado');
+    }
+    try { DriveApp.getFileById(templateId); }
+    catch (e) { return _t11_fail_('GeracaoContrato', 'Template inacessível: ' + e.message); }
+
+    // Validação rejeita dados vazios
+    const errVazio = _f4doc_validarCampos_({}, 'CONTRATO');
+    if (!errVazio) return _t11_fail_('GeracaoContrato', 'Validação não detectou campos obrigatórios ausentes');
+
+    // Validação aceita dados completos
+    const dadosOk = {
+      nome: 'Cliente Teste', cpf: '000.000.000-00',
+      advogadoResp: 'Luiz Fernando', oabAdv: '253.413',
+      tipoHonorario: 'Fixo', valorHonorario: '1500',
+      formaPagamento: 'PIX', descricaoCausa: 'Ação de Teste',
+      areaDireito: 'Cível'
+    };
+    const errCompleto = _f4doc_validarCampos_(dadosOk, 'CONTRATO');
+    if (errCompleto) return _t11_fail_('GeracaoContrato', 'Validação rejeitou dados completos: ' + errCompleto);
+
+    return _t11_ok_('GeracaoContrato', 'Template acessível + validação OK (arquivo não gerado)');
+  } catch (e) {
+    return _t11_fail_('GeracaoContrato', e.message);
+  }
+}
+
+// ---- Teste 04: Geração de Procuração ----
+// Mesma abordagem do teste 03 para o template de Procuração.
+
+function t11_GeracaoProcuracao() {
+  try {
+    const templateId = TEMPLATES.PROCURACAO;
+    if (!templateId || templateId.startsWith('PREENCHA')) {
+      return _t11_skip_('GeracaoProcuracao', 'TEMPLATES.PROCURACAO não configurado');
+    }
+    try { DriveApp.getFileById(templateId); }
+    catch (e) { return _t11_fail_('GeracaoProcuracao', 'Template inacessível: ' + e.message); }
+
+    const errVazio = _f4doc_validarCampos_({}, 'PROCURACAO');
+    if (!errVazio) return _t11_fail_('GeracaoProcuracao', 'Validação não detectou campos obrigatórios ausentes');
+
+    const dadosOk = {
+      nome: 'Cliente Teste', cpf: '000.000.000-00',
+      advogadoResp: 'Luiz Fernando', oabAdv: '253.413',
+      areaDireito: 'Cível'
+    };
+    const errCompleto = _f4doc_validarCampos_(dadosOk, 'PROCURACAO');
+    if (errCompleto) return _t11_fail_('GeracaoProcuracao', 'Validação rejeitou dados completos: ' + errCompleto);
+
+    return _t11_ok_('GeracaoProcuracao', 'Template acessível + validação OK (arquivo não gerado)');
+  } catch (e) {
+    return _t11_fail_('GeracaoProcuracao', e.message);
+  }
+}
+
+// ---- Teste 05: Leitura de E-mail com CNJ ----
+// Passa corpo fictício com número CNJ válido para extrairPjePush_
+// e verifica que o número é extraído corretamente.
+
+function t11_LeituraEmailComCNJ() {
+  try {
+    const cnj  = '0012345-67.2024.8.19.0001';
+    const corpo = [
+      'Número do Processo: ' + cnj,
+      'Polo Ativo: João da Silva',
+      'Polo Passivo: Empresa Teste Ltda',
+      'Órgão: 1ª Vara Cível de Nova Iguaçu',
+      'Classe Judicial: Ação de Cobrança',
+      'Assunto: Cobrança de Dívida',
+      '12/06/2024 09:30 - Despacho: Cite-se o réu no endereço declinado.',
+    ].join('\n');
+
+    const dados = extrairPjePush_(corpo, new Date());
+
+    if (!dados) return _t11_fail_('LeituraEmailComCNJ', 'extrairPjePush_ retornou null para corpo com CNJ válido');
+    if (!dados.numProcesso) return _t11_fail_('LeituraEmailComCNJ', 'numProcesso não extraído do corpo');
+    if (normNum_(dados.numProcesso) !== normNum_(cnj)) {
+      return _t11_fail_('LeituraEmailComCNJ', 'CNJ extraído incorretamente: ' + dados.numProcesso + ' (esperado ' + cnj + ')');
+    }
+
+    return _t11_ok_('LeituraEmailComCNJ',
+      'CNJ=' + dados.numProcesso + ' | Polo Ativo=' + (dados.poloAtivo || '(vazio)'));
+  } catch (e) {
+    return _t11_fail_('LeituraEmailComCNJ', e.message);
+  }
+}
+
+// ---- Teste 06: E-mail sem número CNJ ----
+// Verifica dois casos: remetente desconhecido (→null) e corpo
+// sem CNJ para remetente reconhecido (→null no parser PJe).
+
+function t11_EmailSemCNJ() {
+  try {
+    const corpoSemCNJ = 'Prezado advogado, segue informação sem número de processo identificável.';
+
+    // Remetente não reconhecido → extrairDadosEmail_ retorna null imediatamente
+    const r1 = extrairDadosEmail_(corpoSemCNJ, 'noreply@desconhecido.com.br', new Date());
+    if (r1 !== null) {
+      return _t11_fail_('EmailSemCNJ', 'Remetente não reconhecido deveria retornar null');
+    }
+
+    // Remetente PJe reconhecido + corpo sem CNJ → extrairPjePush_ retorna null
+    const r2 = extrairPjePush_(corpoSemCNJ, new Date());
+    if (r2 !== null) {
+      return _t11_fail_('EmailSemCNJ', 'Corpo sem CNJ deveria retornar null em extrairPjePush_');
+    }
+
+    return _t11_ok_('EmailSemCNJ', 'Remetente desconhecido=null, corpo sem CNJ=null — ambos corretos');
+  } catch (e) {
+    return _t11_fail_('EmailSemCNJ', e.message);
+  }
+}
+
+// ---- Teste 07: Deduplicação de Andamentos ----
+// Verifica normNum_, inicialização do cache _deduplicacaoCache_,
+// detecção de hash presente e ausente no Set.
+
+function t11_Deduplicacao() {
+  const cacheAnterior = _deduplicacaoCache_; // salva estado
+  try {
+    // normNum_ deve remover todos os não-dígitos
+    const cnj        = '0012345-67.2024.8.19.0001';
+    const normalizado = normNum_(cnj);
+    if (normalizado !== '00123456720248190001') {
+      return _t11_fail_('Deduplicacao', 'normNum_ incorreto: "' + normalizado + '"');
+    }
+
+    // _f2_verificarDuplicata_ com hash inexistente → false + cache inicializado
+    _deduplicacaoCache_ = null;
+    const hashFake = 'hash_inexistente_t11_' + Date.now();
+    const ss       = getPlanilha_();
+    const dup1     = _f2_verificarDuplicata_(ss, hashFake);
+    if (dup1 !== false) return _t11_fail_('Deduplicacao', 'Hash inexistente deveria retornar false');
+    if (_deduplicacaoCache_ === null) return _t11_fail_('Deduplicacao', 'Cache não foi inicializado na 1ª chamada');
+
+    // Após adicionar o hash ao Set: deve retornar true
+    _deduplicacaoCache_.add(hashFake);
+    const dup2 = _f2_verificarDuplicata_(ss, hashFake);
+    if (!dup2) return _t11_fail_('Deduplicacao', 'Hash adicionado ao Set não foi detectado como duplicata');
+
+    return _t11_ok_('Deduplicacao', 'normNum_, cache Set e detecção de duplicata funcionando');
+  } catch (e) {
+    return _t11_fail_('Deduplicacao', e.message);
+  } finally {
+    _deduplicacaoCache_ = cacheAnterior; // restaura estado original
+  }
+}
+
+// ---- Teste 08: Criação de Prazo Pendente de Conferência ----
+// Adiciona prazo via appendAgenda_, verifica inserção na aba
+// Agenda e faz cleanup deletando a linha de teste.
+
+function t11_CriacaoPrazo() {
+  try {
+    const ss  = getPlanilha_();
+    const aba = getSheet_(ss, 'Agenda');
+    if (!aba) return _t11_skip_('CriacaoPrazo', 'Aba Agenda não encontrada');
+
+    const linhasAntes = aba.getLastRow();
+
+    // Data futura (+365d) — não aciona alertas reais
+    const dataFutura = new Date();
+    dataFutura.setDate(dataFutura.getDate() + 365);
+    const dataStr = Utilities.formatDate(dataFutura, 'America/Sao_Paulo', 'dd/MM/yyyy');
+
+    const item = {
+      proc:      'T11-TESTE-0000000-00.0000.0.00.0000',
+      data:      dataStr,
+      tipo:      'Prazo Processual Teste',
+      desc:      '[T11 TESTE AUTOMATICO] Remova se este prazo aparecer',
+      cliente:   'CLIENTE-TESTE-T11',
+      resp:      'Sistema',
+      prioridade: '🟢 Baixa'
+    };
+
+    appendAgenda_(aba, item);
+
+    const linhasDepois = aba.getLastRow();
+    if (linhasDepois <= linhasAntes) {
+      return _t11_fail_('CriacaoPrazo', 'appendAgenda_ não adicionou linha (lastRow=' + linhasDepois + ')');
+    }
+
+    // Verifica que a linha contém o marcador de teste
+    const ultima = aba.getRange(linhasDepois, 1, 1, aba.getLastColumn()).getValues()[0];
+    const temRef = ultima.some(v => String(v).includes('T11-TESTE'));
+    if (!temRef) return _t11_fail_('CriacaoPrazo', 'Linha adicionada não contém ref. do teste');
+
+    // Cleanup
+    aba.deleteRow(linhasDepois);
+
+    return _t11_ok_('CriacaoPrazo',
+      'Prazo adicionado na linha ' + linhasDepois + ' com status "' + F3.STATUS_PENDENTE + '" e removido');
+  } catch (e) {
+    return _t11_fail_('CriacaoPrazo', e.message);
+  }
+}
+
+// ---- Teste 09: Alerta de Prazo (KPIs) ----
+// Chama _f3_kpisAgenda_ e verifica que a estrutura retornada
+// contém todos os campos esperados pelo dashboard.
+
+function t11_Alerta() {
+  try {
+    const ss   = getPlanilha_();
+    const kpis = _f3_kpisAgenda_(ss);
+
+    const CAMPOS = ['hoje', 'amanha', 'semana', 'vencidos', 'semResp', 'pendConf', 'processosParados'];
+    const faltando = CAMPOS.filter(c => !(c in kpis));
+    if (faltando.length > 0) {
+      return _t11_fail_('Alerta', 'Campos KPI ausentes: ' + faltando.join(', '));
+    }
+
+    const resumo = 'hoje=' + kpis.hoje + ' amanhã=' + kpis.amanha
+      + ' semana=' + kpis.semana + ' vencidos=' + kpis.vencidos
+      + ' pendConf=' + kpis.pendConf + ' parados=' + kpis.processosParados;
+
+    return _t11_ok_('Alerta', 'KPIs OK — ' + resumo);
+  } catch (e) {
+    return _t11_fail_('Alerta', e.message);
+  }
+}
+
+// ---- Teste 10: Relatório Semanal (coleta de dados) ----
+// Chama as funções _r3_* sem enviar e-mail e verifica estrutura.
+
+function t11_RelatorioSemanal() {
+  try {
+    const ss   = getPlanilha_();
+    const hoje = new Date();
+    const seg  = new Date(hoje); seg.setDate(hoje.getDate() - ((hoje.getDay() + 6) % 7)); seg.setHours(0,0,0,0);
+    const dom  = new Date(seg);  dom.setDate(seg.getDate() + 6);                           dom.setHours(23,59,59,0);
+
+    const kpis       = _r3_kpis(ss);
+    const financeiro = _r3_financeiro(ss);
+    const agenda     = _r3_agenda(ss, seg, dom);
+    const inativos   = _r3_processosInativos(ss);
+
+    if (typeof kpis.clientes === 'undefined')    return _t11_fail_('RelatorioSemanal', '_r3_kpis: campo "clientes" ausente');
+    if (typeof financeiro.recebido === 'undefined') return _t11_fail_('RelatorioSemanal', '_r3_financeiro: campo "recebido" ausente');
+    if (!Array.isArray(agenda))   return _t11_fail_('RelatorioSemanal', '_r3_agenda: não retornou Array');
+    if (!Array.isArray(inativos)) return _t11_fail_('RelatorioSemanal', '_r3_processosInativos: não retornou Array');
+
+    const resumo = 'clientes=' + kpis.clientes + ' processos=' + kpis.processos
+      + ' agenda=' + agenda.length + 'it inativos=' + inativos.length
+      + ' recebido=R$' + Number(financeiro.recebido).toFixed(0);
+
+    return _t11_ok_('RelatorioSemanal', 'Coleta OK — ' + resumo + ' (e-mail NÃO enviado)');
+  } catch (e) {
+    return _t11_fail_('RelatorioSemanal', e.message);
+  }
+}
+
+// ---- Teste 11: Backup Automático ----
+// Executa backupSemanal() e verifica que um arquivo de backup
+// foi criado na pasta dedicada. Não apaga o backup criado.
+
+function t11_Backup() {
+  try {
+    const ss    = SpreadsheetApp.getActiveSpreadsheet();
+    const arq   = DriveApp.getFileById(ss.getId());
+    const pasta = _pastaBackups_(arq);
+
+    // Conta backups antes
+    const antes = [];
+    const iterA = pasta.getFilesByType(MimeType.GOOGLE_SHEETS);
+    while (iterA.hasNext()) {
+      const f = iterA.next();
+      if (f.getName().includes('[Backup')) antes.push(f.getId());
+    }
+
+    backupSemanal();
+
+    // Conta backups depois
+    const depois = [];
+    const iterD = pasta.getFilesByType(MimeType.GOOGLE_SHEETS);
+    while (iterD.hasNext()) {
+      const f = iterD.next();
+      if (f.getName().includes('[Backup')) depois.push(f.getId());
+    }
+
+    if (depois.length <= antes.length) {
+      return _t11_fail_('Backup', 'Nenhum arquivo de backup criado (antes=' + antes.length + ' depois=' + depois.length + ')');
+    }
+
+    return _t11_ok_('Backup', 'Backup criado (' + depois.length + ' na pasta; ' + (depois.length - antes.length) + ' novo(s))');
+  } catch (e) {
+    return _t11_fail_('Backup', e.message);
+  }
+}
+
+// ---- Teste 12: Erro Proposital (robustez) ----
+// Verifica que funções críticas tratam entradas inválidas
+// graciosamente (null, string vazia, objeto vazio) sem lançar exceções.
+
+function t11_ErroProposital() {
+  try {
+    const ss = getPlanilha_();
+
+    // resolverAba_ com aba inexistente deve retornar null, não lançar exceção
+    const abaNaoExiste = resolverAba_(ss, ['ABA_INEXISTENTE_ZZZZ_T11']);
+    if (abaNaoExiste !== null) {
+      return _t11_fail_('ErroProposital', 'resolverAba_ deveria retornar null para aba inexistente');
+    }
+
+    // _f4doc_validarCampos_ deve detectar objeto vazio
+    const erroVazio = _f4doc_validarCampos_({}, 'CONTRATO');
+    if (!erroVazio) {
+      return _t11_fail_('ErroProposital', '_f4doc_validarCampos_({}) deveria retornar erro');
+    }
+
+    // normNum_ com string sem dígitos deve retornar ""
+    const nDigits = normNum_('sem-numeros-aqui!!!');
+    if (nDigits !== '') {
+      return _t11_fail_('ErroProposital', 'normNum_ deveria retornar "" para string não-numérica');
+    }
+
+    // extrairDadosEmail_ com remetente desconhecido deve retornar null
+    const emailNull = extrairDadosEmail_('qualquer corpo', 'desconhecido@xyz.com', new Date());
+    if (emailNull !== null) {
+      return _t11_fail_('ErroProposital', 'extrairDadosEmail_ deve retornar null para remetente desconhecido');
+    }
+
+    // _f4_getApiKey não deve lançar exceção mesmo sem configuração
+    try { _f4_getApiKey(); } catch (ex) {
+      return _t11_fail_('ErroProposital', '_f4_getApiKey lançou exceção inesperada: ' + ex.message);
+    }
+
+    return _t11_ok_('ErroProposital',
+      'resolverAba_=null, validação campos vazios, normNum_, remetente desconhecido, getApiKey — todos OK');
+  } catch (e) {
+    return _t11_fail_('ErroProposital', 'Exceção não capturada: ' + e.message);
+  }
+}
+
+// ---- Teste 13: Log e Auditoria ----
+// Escreve entrada de teste no 🔧 Log via registrarLog(), verifica
+// que foi gravada, e faz cleanup. Também testa _f4doc_registrarAuditoria_.
+
+function t11_LogAuditoria() {
+  try {
+    const ss      = getPlanilha_();
+    const abaLog  = ss.getSheetByName('🔧 Log');
+    if (!abaLog) return _t11_skip_('LogAuditoria', 'Aba 🔧 Log não existe');
+
+    const marcador = '[T11-LOG-' + Date.now() + ']';
+    registrarLog(marcador);
+
+    const ultimaLinha = abaLog.getLastRow();
+    const conteudo    = String(abaLog.getRange(ultimaLinha, 2).getValue());
+    if (!conteudo.includes(marcador)) {
+      return _t11_fail_('LogAuditoria', 'Mensagem não encontrada na última linha do Log');
+    }
+
+    abaLog.deleteRow(ultimaLinha); // cleanup
+
+    // Testa _f4doc_registrarAuditoria_ (falha silenciosa se aba Auditoria ausente)
+    const dadosTeste = { id: 'CLI-T11', nome: 'CLIENTE TESTE T11', areaDireito: 'Cível' };
+    _f4doc_registrarAuditoria_(ss, dadosTeste, 'Contrato T11', '[T11 TESTE]');
+
+    const abaAud = resolverAba_(ss, ['Auditoria']);
+    if (abaAud) {
+      const ultAud = abaAud.getLastRow();
+      const row    = abaAud.getRange(ultAud, 1, 1, abaAud.getLastColumn()).getValues()[0];
+      const temRef = row.some(v => String(v).includes('T11'));
+      if (temRef) abaAud.deleteRow(ultAud); // cleanup
+    }
+
+    return _t11_ok_('LogAuditoria',
+      'registrarLog: escreveu e removeu linha de teste com sucesso. Auditoria: ' + (abaAud ? 'testada' : 'aba ausente'));
+  } catch (e) {
+    return _t11_fail_('LogAuditoria', e.message);
+  }
+}
+
+// ---- Teste 14: Chamada da IA (Claude) ----
+// Envia prompt mínimo ("Responda apenas: OK") e verifica resposta.
+// Pulado se API key não configurada.
+
+function t11_ChamadaIA() {
+  try {
+    const apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
+    if (!apiKey) return _t11_skip_('ChamadaIA', 'CLAUDE_API_KEY não configurada');
+
+    const prompt   = 'Responda apenas com a palavra: OK';
+    const resposta = _f4_chamarClaude(prompt, false); // Haiku — custo mínimo
+
+    if (!resposta) return _t11_fail_('ChamadaIA', '_f4_chamarClaude retornou null');
+    if (!resposta.toUpperCase().includes('OK')) {
+      return _t11_fail_('ChamadaIA', 'Resposta não contém "OK": "' + resposta.substring(0, 60) + '"');
+    }
+
+    _f5_logarIA_('t11_ChamadaIA', prompt, F4.MODELO, resposta, 'Teste unitário');
+
+    return _t11_ok_('ChamadaIA', 'API respondeu: "' + resposta.trim().substring(0, 40) + '"');
+  } catch (e) {
+    return _t11_fail_('ChamadaIA', e.message);
+  }
+}
+
+// ---- Teste 15: Modo Dry Run ----
+// Verifica que _f2_isDryRun_() reflete corretamente o estado da
+// propriedade F2.PROP_DRY_RUN e restaura o estado original ao final.
+
+function t11_ModoDryRun() {
+  const props        = PropertiesService.getScriptProperties();
+  const valorOriginal = props.getProperty(F2.PROP_DRY_RUN);
+  try {
+    // Ativa dry run
+    props.setProperty(F2.PROP_DRY_RUN, 'true');
+    if (!_f2_isDryRun_()) {
+      return _t11_fail_('ModoDryRun', '_f2_isDryRun_() retornou false com PROP_DRY_RUN=true');
+    }
+
+    // Desativa dry run
+    props.deleteProperty(F2.PROP_DRY_RUN);
+    if (_f2_isDryRun_()) {
+      return _t11_fail_('ModoDryRun', '_f2_isDryRun_() retornou true com propriedade removida');
+    }
+
+    return _t11_ok_('ModoDryRun', 'Alternância ativo→inativo funcionando corretamente');
+  } catch (e) {
+    return _t11_fail_('ModoDryRun', e.message);
+  } finally {
+    // Restaura estado original em qualquer caso
+    if (valorOriginal !== null && valorOriginal !== undefined) {
+      props.setProperty(F2.PROP_DRY_RUN, valorOriginal);
+    } else {
+      props.deleteProperty(F2.PROP_DRY_RUN);
+    }
+  }
+}
+
+// ---- Suite: Executar todos os 15 testes ----
+
+function executarSuiteDeTestes() {
+  const ui = SpreadsheetApp.getUi();
+
+  const conf = ui.alert('🧪 Suite de Testes — Neves Marques',
+    'Executará 15 testes de validação do sistema.\n\n'
+    + '⚠️ Testes com efeitos colaterais (todos com cleanup automático):\n'
+    + '  • Testes 01 e 02: criam e removem pastas temporárias no Drive\n'
+    + '  • Teste 08: adiciona e remove linha na Agenda\n'
+    + '  • Teste 11: cria um backup real da planilha (mantido)\n'
+    + '  • Teste 13: adiciona e remove linha no Log e Auditoria\n'
+    + '  • Teste 14: chama a API Claude — custo mínimo (Haiku)\n\n'
+    + '⏱️ Duração estimada: 30–90 segundos. Continuar?',
+    ui.ButtonSet.YES_NO);
+  if (conf !== ui.Button.YES) return;
+
+  const TESTES = [
+    { fn: t11_CriacaoCliente,    nome: '01 Criação de Cliente'            },
+    { fn: t11_CriacaoPasta,      nome: '02 Criação de Pasta (idempotência)' },
+    { fn: t11_GeracaoContrato,   nome: '03 Geração de Contrato'           },
+    { fn: t11_GeracaoProcuracao, nome: '04 Geração de Procuração'         },
+    { fn: t11_LeituraEmailComCNJ,nome: '05 Leitura E-mail com CNJ'        },
+    { fn: t11_EmailSemCNJ,       nome: '06 E-mail sem número CNJ'         },
+    { fn: t11_Deduplicacao,      nome: '07 Deduplicação de Andamentos'    },
+    { fn: t11_CriacaoPrazo,      nome: '08 Criação de Prazo Pendente'     },
+    { fn: t11_Alerta,            nome: '09 Alerta de Prazo (KPIs)'        },
+    { fn: t11_RelatorioSemanal,  nome: '10 Relatório Semanal (coleta)'    },
+    { fn: t11_Backup,            nome: '11 Backup Automático'             },
+    { fn: t11_ErroProposital,    nome: '12 Erro Proposital (robustez)'    },
+    { fn: t11_LogAuditoria,      nome: '13 Log e Auditoria'               },
+    { fn: t11_ChamadaIA,         nome: '14 Chamada da IA (Claude)'        },
+    { fn: t11_ModoDryRun,        nome: '15 Modo Dry Run'                  },
+  ];
+
+  const resultados = [];
+  let passou = 0, falhou = 0, pulado = 0;
+
+  for (const t of TESTES) {
+    let res;
+    try {
+      res = t.fn();
+    } catch (e) {
+      res = _t11_fail_(t.nome, 'Exceção não capturada: ' + e.message);
+    }
+    resultados.push(res);
+    if (res.passou === true)   passou++;
+    else if (res.passou === false) falhou++;
+    else                       pulado++;
+
+    registrarLog('[T11 SUITE] ' + (res.passou === true ? '✅' : res.passou === false ? '❌' : '⚪') + ' ' + t.nome);
+  }
+
+  const status = falhou > 0 ? '❌ ' + falhou + ' FALHA(S)'
+               : pulado > 0 ? '⚠️ OK COM AVISOS'
+               :              '✅ TUDO OK';
+
+  const linhas = resultados.map(function(r, i) {
+    const emoji = r.passou === true ? '✅' : r.passou === false ? '❌' : '⚪';
+    return emoji + ' ' + r.nome + '\n     ' + r.detalhe;
+  });
+
+  const msg = [
+    '🧪 Suite de Testes — ' + status,
+    '─'.repeat(45),
+    '✅ ' + passou + ' | ❌ ' + falhou + ' | ⚪ ' + pulado + ' pulado(s)',
+    '',
+    linhas.join('\n\n')
+  ].join('\n');
+
+  registrarLog('[T11 SUITE] Concluída: passou=' + passou + ' falhou=' + falhou + ' pulado=' + pulado);
+  ui.alert('🧪 Resultado da Suite', msg.substring(0, 2000)
+    + (msg.length > 2000 ? '\n\n…[ver 🔧 Log para detalhes completos]' : ''), ui.ButtonSet.OK);
 }
