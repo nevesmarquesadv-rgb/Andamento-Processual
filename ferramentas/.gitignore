@@ -1,0 +1,3 @@
+# Artefatos da conversao de PDF para Markdown
+*.md.cache/
+ferramentas/*.pdf
